@@ -1,7 +1,15 @@
 # market-traits
 
 Market/sector/country regime reads, extracted from the Market-Analysis "Market Traits" page so it can
-be shared across repos:
+be shared across repos. Two packages:
+
+- **`market_traits/`** (Python) — the actual regime computation, described below.
+- **`frontend/`** (TypeScript) — shared React data hooks + types for consuming the JSON these
+  functions return. It ships hooks and types only, deliberately no UI — Market-Analysis and Business
+  each use different design systems (Tailwind-style components vs plain CSS classes), so each app
+  builds its own presentational component around the shared hook. See [frontend/README.md](frontend/README.md).
+
+## Python package
 
 - `market_weather` — is the tape risk-on and trending, or choppy/defensive? (trend, breadth,
   trending-vs-choppy efficiency, volatility, credit risk-appetite → one score + regime label)
