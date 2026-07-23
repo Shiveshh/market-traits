@@ -6,6 +6,10 @@ same trend/momentum signals (price vs 200d, 6/3/1-month momentum, Kaufman effici
 directly from global_markets.py, not reimplemented. Reports CURRENT phase, PAST monthly phase
 history, FORWARD lean, calendar-month seasonality (also reused).
 
+Themes span both directions of secular change: "emerging" (AI infra, nuclear, ...) and "fading"
+(legacy retail, ICE autos, fossil-fuel majors, linear media) — see tags.THEME_LIFECYCLE. Same phase
+math either way; lifecycle is just a label for which side of the disruption a theme sits on.
+
 Two things a consumer app usually wants layered in but that this package doesn't own:
   - a fair-value-based valuation verdict per theme (needs a fundamentals/factor-screen engine)
   - a "where it lives" geographic breakdown from each theme's constituent tickers' HQ country
@@ -37,6 +41,7 @@ REPRESENTATIVE_ETF: dict[str, str] = {
     "autonomy": "IDRV", "genomics": "ARKG", "india_growth": "INDA",
     "africa_growth": "EZA", "energy_storage": "LIT", "weight_loss_glp1": "XLV",
     "water_scarcity": "PHO",
+    "legacy_retail": "XRT", "ice_autos": "CARZ", "fossil_fuels": "XLE", "linear_media": "PBS",
 }
 
 
@@ -82,6 +87,7 @@ def _compute(*, start: str, data=None,
         m = _metrics(px) if px is not None else None
         geography = geo_fn(g.get("tickers", [])) if (geo_fn and not injected and g.get("tickers")) else []
         base = {"key": key, "label": label, "description": THEME_DESCRIPTIONS.get(key, ""),
+                "lifecycle": g.get("lifecycle", "emerging"),
                 "etf": etf, "etfs": g.get("etfs", []), "tickers": g.get("tickers", []),
                 "geography": geography,
                 "valuation": valuation_by_key.get(key, {"n": 0, "verdict": "insufficient_data"})}
@@ -113,7 +119,9 @@ def _compute(*, start: str, data=None,
                  "(when a valuation_fn is wired in) is a fair-value-based verdict aggregated across each theme's "
                  "curated constituent tickers — undervalued/fair/overvalued, not a relative-cheapness percentile "
                  "like the country map. geography (when a geo_fn is wired in) = HQ-country breakdown of each "
-                 "theme's constituents (where the industry actually lives), not investment flows."),
+                 "theme's constituents (where the industry actually lives), not investment flows. lifecycle "
+                 "tags each theme 'emerging' (secular-growth) or 'fading' (structurally shrinking, being "
+                 "displaced by an emerging theme elsewhere in this map) — see tags.THEME_LIFECYCLE."),
     }
 
 

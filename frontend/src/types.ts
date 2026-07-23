@@ -107,6 +107,7 @@ export interface Industry {
   key: string;
   label: string;
   description: string;
+  lifecycle: "emerging" | "fading";
   etf: string | null;
   etfs: string[];
   tickers: string[];

@@ -9,6 +9,14 @@ Two orthogonal labels per name:
     yfinance, so they are a small curated map keyed by ticker. Unknown tickers
     simply carry no theme — this is a convenience layer, not a source of truth.
 
+Every theme also carries a `lifecycle` tag (see THEME_LIFECYCLE): "emerging"
+for secular-growth baskets, "fading" for structurally-shrinking ones (the
+"industries going away" side of the Future Industries tab — legacy retail,
+ICE autos, fossil-fuel majors, linear/print media). Fading themes are not
+short ideas by themselves (some, like the oil majors, still throw off cash
+for years) — they mark businesses on the losing side of a secular disruption,
+for the same trend/momentum/phase read the emerging themes get.
+
 Keep the map honest and small: only add a ticker when its membership is
 unambiguous. A name can belong to several themes (NVDA = ai_infra + semiconductors).
 """
@@ -35,6 +43,26 @@ THEME_LABELS: dict[str, str] = {
     "energy_storage": "Energy storage / batteries",
     "weight_loss_glp1": "GLP-1 / weight-loss drugs",
     "water_scarcity": "Water scarcity / infrastructure",
+    # Fading — structurally shrinking, disrupted-by-the-above-themes baskets.
+    "legacy_retail": "Legacy brick-and-mortar retail",
+    "ice_autos": "Internal-combustion automakers",
+    "fossil_fuels": "Fossil-fuel majors",
+    "linear_media": "Linear TV / print media",
+}
+
+# Lifecycle stage per theme: "emerging" (secular-growth basket) or "fading"
+# (structurally shrinking, being displaced by an emerging theme elsewhere in
+# this map). Every key in THEME_LABELS must appear here.
+THEME_LIFECYCLE: dict[str, str] = {
+    "ai_infra": "emerging", "semiconductors": "emerging", "cybersecurity": "emerging",
+    "electrification": "emerging", "nuclear": "emerging", "biotech_tools": "emerging",
+    "defense_space": "emerging", "healthcare_innov": "emerging", "robotics": "emerging",
+    "quantum_computing": "emerging", "critical_minerals": "emerging", "space_satcom": "emerging",
+    "autonomy": "emerging", "genomics": "emerging", "india_growth": "emerging",
+    "africa_growth": "emerging", "energy_storage": "emerging", "weight_loss_glp1": "emerging",
+    "water_scarcity": "emerging",
+    "legacy_retail": "fading", "ice_autos": "fading",
+    "fossil_fuels": "fading", "linear_media": "fading",
 }
 
 # One-line thesis per theme — why it's a secular basket, not just a sector label.
@@ -58,6 +86,10 @@ THEME_DESCRIPTIONS: dict[str, str] = {
     "energy_storage": "Grid-scale and behind-the-meter batteries needed to firm intermittent renewables.",
     "weight_loss_glp1": "GLP-1 obesity/diabetes drugs — the fastest-growing pharma category in decades.",
     "water_scarcity": "Aging infrastructure + scarcity economics in utilities, filtration and treatment.",
+    "legacy_retail": "Mall-anchor department stores losing share to e-commerce and off-price, structurally.",
+    "ice_autos": "Traditional automakers' core internal-combustion business, ceding share to EV-native and Chinese entrants.",
+    "fossil_fuels": "Oil & gas majors — still cash-generative today, but on the losing side of a multi-decade energy transition.",
+    "linear_media": "Cable/broadcast TV and print, losing both audience and ad dollars to streaming and digital.",
 }
 
 # Curated ticker → themes. Deliberately conservative; extend as conviction warrants.
@@ -186,6 +218,25 @@ _THEME_MAP: dict[str, tuple[str, ...]] = {
     "AWK": ("water_scarcity",),
     "PNR": ("water_scarcity",),
     "CWT": ("water_scarcity",),
+    # Legacy brick-and-mortar retail (fading — mall department stores losing to e-commerce)
+    "M": ("legacy_retail",),
+    "KSS": ("legacy_retail",),
+    "DDS": ("legacy_retail",),
+    "GPS": ("legacy_retail",),
+    # Internal-combustion automakers (fading — core ICE business, ex their EV/tech optionality)
+    "F": ("ice_autos",),
+    "GM": ("ice_autos",),
+    "STLA": ("ice_autos",),
+    # Fossil-fuel majors (fading — long-term energy-transition demand headwind)
+    "XOM": ("fossil_fuels",),
+    "CVX": ("fossil_fuels",),
+    "COP": ("fossil_fuels",),
+    "OXY": ("fossil_fuels",),
+    # Linear TV / print media (fading — audience and ad-dollar share loss to streaming/digital)
+    "PARA": ("linear_media",),
+    "WBD": ("linear_media",),
+    "FOXA": ("linear_media",),
+    "NWSA": ("linear_media",),
 }
 
 # Optional finer-grained grouping WITHIN a theme — {theme: {ticker: subsector label}}.
@@ -254,6 +305,10 @@ THEME_ETFS: dict[str, str] = {
     "INDA": "india_growth", "EPI": "india_growth",
     "AFK": "africa_growth", "EZA": "africa_growth",
     "PHO": "water_scarcity", "CGW": "water_scarcity",
+    "XRT": "legacy_retail",
+    "CARZ": "ice_autos",
+    "XLE": "fossil_fuels", "XOP": "fossil_fuels",
+    "PBS": "linear_media",
 }
 
 
@@ -301,6 +356,7 @@ def theme_groups() -> list[dict]:
             "key": key,
             "label": label,
             "description": THEME_DESCRIPTIONS.get(key, ""),
+            "lifecycle": THEME_LIFECYCLE.get(key, "emerging"),
             "tickers": tickers,
             "subsectors": subsectors,
             "etfs": sorted(etfs_by_theme.get(key, [])),
