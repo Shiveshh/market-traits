@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "description": "Shared React data hooks + TypeScript types for the market-traits package's API responses (market_weather / global_markets / industry_markets).",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "main": "frontend/dist/index.js",
+  "types": "frontend/dist/index.d.ts",
+  "files": ["frontend/dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepare": "npm run build"

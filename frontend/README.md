@@ -4,22 +4,27 @@ Shared React data hooks + TypeScript types for the [market-traits](../README.md)
 API responses. Hooks and types only — no UI components, since consuming apps use different design
 systems and should style the data themselves.
 
+The npm package lives here for organization, but its `package.json`/`tsconfig.json` sit at the repo
+root (`../package.json`) — plain `npm install git+...` only works when `package.json` is at the git
+repo root, so that's where it has to be. `market_traits/` (the Python package) is unaffected; pip and
+npm each ignore the other's config file.
+
 ## Install
 
 ```
-npm install github:Shiveshh/market-traits#main --workspace-root=frontend
+npm install github:Shiveshh/market-traits#main
 ```
 
 or, in `package.json`:
 
 ```json
 "dependencies": {
-  "market-traits-frontend": "github:Shiveshh/market-traits#main:frontend"
+  "market-traits-frontend": "github:Shiveshh/market-traits#main"
 }
 ```
 
 `npm install` runs the package's `prepare` script automatically for git dependencies, which
-compiles `src/` to `dist/` — no manual build step needed in the consuming repo.
+compiles `frontend/src/` to `frontend/dist/` — no manual build step needed in the consuming repo.
 
 ## Usage
 
@@ -45,8 +50,8 @@ for building your own presentational components around the data.
 
 ## Keeping consumers in sync
 
-Edit `src/`, commit, push. Each consuming repo picks up the change with:
+Edit `frontend/src/`, commit, push. Each consuming repo picks up the change with:
 
 ```
-npm install -U github:Shiveshh/market-traits#main:frontend
+npm install -U github:Shiveshh/market-traits#main
 ```
