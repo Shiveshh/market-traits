@@ -87,6 +87,20 @@ ISO_NUM = {
     "NG": "566", "KW": "414", "PK": "586",
 }
 
+# Sub-markets: narrower segment/exchange ETFs WITHIN a country, for the drill-down detail page —
+# e.g. the US isn't one market, it's Nasdaq growth vs Dow industrials vs Russell small-cap. Curated
+# conservatively: only added where a liquid, well-established free-data ETF exists. Most countries
+# have none yet (empty list) — the detail page then just shows the country's overall read.
+SUB_MARKETS: dict[str, list[tuple[str, str]]] = {
+    "US": [("Nasdaq 100 (large-cap tech)", "QQQ"), ("Dow Jones Industrials", "DIA"), ("Russell 2000 (small-cap)", "IWM")],
+    "CN": [("China A-shares (onshore)", "ASHR"), ("China internet", "KWEB")],
+    "JP": [("Japan small-cap", "SCJ")],
+    "IN": [("India small-cap", "SMIN")],
+    "GB": [("UK small-cap", "EWUS")],
+    "BR": [("Brazil small-cap", "BRF")],
+    "EU": [("Europe small-cap", "DFE")],
+}
+
 # phase → (display label, cycle rank for sorting, hex for the map). Warm = expanding, cool = contracting.
 PHASES = {
     "booming":    {"label": "Booming",    "rank": 5, "color": "#16a34a"},
@@ -247,3 +261,67 @@ def _as_of(data, etfs) -> str:
         if s is not None and len(s.dropna()):
             return str(s.dropna().index[-1])[:10]
     return ""
+
+
+_SUB_CACHE: dict = {}
+
+
+def country_submarket_detail(iso: str, *, start: str = "2022-01-01", data=None, ttl: int = 3600) -> dict:
+    """Drill-down for one country: its curated sub-markets (see SUB_MARKETS) each get the SAME
+    phase read as the top-level country map, applied to their own (real, liquid) ETF — no synthetic
+    basket needed here, unlike industry_markets.industry_theme_detail. `overall` mirrors the
+    country's row from global_markets(). Cached `ttl`s per iso. Pass `data` (dict etf→Series) to
+    test the sub-market path without network — this also skips `overall`."""
+    import time
+    cached = _SUB_CACHE.get(iso)
+    if data is None and cached and (time.time() - cached["t"]) < ttl:
+        return cached["val"]
+    out = _compute_submarket_detail(iso, start=start, data=data)
+    if data is None and "error" not in out:
+        _SUB_CACHE[iso] = {"t": time.time(), "val": out}
+    return out
+
+
+def _compute_submarket_detail(iso: str, *, start: str, data=None) -> dict:
+    country = next((c for c in COUNTRIES if c[0] == iso), None)
+    if country is None:
+        return {"error": f"unknown country '{iso}'"}
+    _, name, main_etf, cfd, _r, _cc = country
+    subs = SUB_MARKETS.get(iso, [])
+
+    injected = data is not None
+    overall = None
+    if not injected:
+        overall_all = global_markets(start=start)
+        overall = next((row for row in overall_all["countries"] if row["iso"] == iso), None)
+
+    base = {"iso": iso, "country": name, "etf": main_etf, "index_cfd": cfd, "overall": overall}
+    if not subs:
+        return {**base, "sub_markets": [], "as_of": "",
+                "note": "No curated sub-markets for this country yet — see overall for the country-index read."}
+
+    etfs = [e for _, e in subs]
+    if data is None:
+        close = _download(etfs, start)
+        data = {e: (close[e] if e in close.columns else None) for e in etfs}
+
+    sub_rows = []
+    for label, etf in subs:
+        px = data.get(etf)
+        m = _metrics(px) if px is not None else None
+        if m is None:
+            sub_rows.append({"label": label, "etf": etf, "phase": "unknown", "color": PHASES["unknown"]["color"]})
+            continue
+        fwd = _forward_lean(m)
+        sub_rows.append({"label": label, "etf": etf, "phase": m["phase"], "color": PHASES[m["phase"]]["color"],
+                          "mom6_pct": round(m["mom6"] * 100, 1), "mom1_pct": round(m["mom1"] * 100, 1),
+                          "efficiency": m["efficiency"], "above_200d": m["above200"],
+                          "forward_lean": fwd["lean"], "accel": fwd["accel"],
+                          "past": _past_phases(px), "seasonality": monthly_seasonality(px)})
+
+    return {**base, "sub_markets": sub_rows, "as_of": _as_of(data, etfs),
+            "note": ("Sub-market reads use the SAME trend/momentum engine as the country-level map, applied to "
+                     "narrower segment/exchange ETFs (e.g. Nasdaq vs Dow vs Russell for the US) where a liquid "
+                     "free-data proxy exists. 'overall' is the country's actual index-ETF row from "
+                     "global_markets() for comparison. Most countries have none curated yet (see SUB_MARKETS) — "
+                     "sub_markets is simply empty.")}

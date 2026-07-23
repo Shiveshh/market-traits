@@ -8,14 +8,15 @@ Two optional hooks (`pe_fn` on global_markets, `valuation_fn`/`geo_fn` on indust
 consumer wire in its own fundamentals/valuation layer; without them those fields are simply omitted.
 """
 from market_traits.market_weather import market_weather, weather_series
-from market_traits.global_markets import global_markets
-from market_traits.industry_markets import industry_markets
+from market_traits.global_markets import global_markets, country_submarket_detail
+from market_traits.industry_markets import industry_markets, industry_theme_detail
 from market_traits.seasonality import monthly_seasonality, SEASON_SCALE
 from market_traits import tags
 
 __all__ = [
     "market_weather", "weather_series",
-    "global_markets", "industry_markets",
+    "global_markets", "country_submarket_detail",
+    "industry_markets", "industry_theme_detail",
     "monthly_seasonality", "SEASON_SCALE",
     "tags",
 ]

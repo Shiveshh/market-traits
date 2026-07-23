@@ -29,7 +29,7 @@ from market_traits.global_markets import (
     _past_phases,
 )
 from market_traits.seasonality import SEASON_SCALE, monthly_seasonality
-from market_traits.tags import THEME_DESCRIPTIONS, THEME_LABELS, theme_groups
+from market_traits.tags import THEME_DESCRIPTIONS, THEME_LABELS, subsectors_for, theme_groups
 
 # theme key → the single most liquid/representative proxy ETF (deliberately curated, not just
 # "first alphabetically" out of THEME_ETFS, which lists every reasonable proxy per theme).
@@ -131,3 +131,98 @@ def _as_of(data, etfs) -> str:
         if s is not None and len(s.dropna()):
             return str(s.dropna().index[-1])[:10]
     return ""
+
+
+def _synthetic_index(series_list):
+    """Equal-weight synthetic basket: normalize each series to 100 at its own first value, then
+    average across the basket (skipping NaN) — a stand-in index for a subsector with no real ETF."""
+    import pandas as pd
+    aligned = pd.concat([s.dropna() / s.dropna().iloc[0] * 100 for s in series_list if len(s.dropna())], axis=1)
+    return aligned.mean(axis=1).dropna()
+
+
+_DETAIL_CACHE: dict = {}
+
+
+def industry_theme_detail(key: str, *, start: str = "2022-01-01", data=None, ttl: int = 3600) -> dict:
+    """Drill-down for one theme: its subsectors (or, for themes with no curated split, each
+    constituent ticker) get their OWN phase read — same engine as the top-level ETF proxy, applied
+    to a synthetic equal-weight basket of that subsector's tickers (real ETFs don't exist at this
+    granularity). `overall` mirrors the theme's row from industry_markets(). Cached `ttl`s per key.
+    Pass `data` (dict ticker→Series) to test the per-ticker/subsector path without network — this
+    also skips `overall` (which would otherwise call the network-hitting industry_markets())."""
+    import time
+    cached = _DETAIL_CACHE.get(key)
+    if data is None and cached and (time.time() - cached["t"]) < ttl:
+        return cached["val"]
+    out = _compute_detail(key, start=start, data=data)
+    if data is None and "error" not in out:
+        _DETAIL_CACHE[key] = {"t": time.time(), "val": out}
+    return out
+
+
+def _compute_detail(key: str, *, start: str, data=None) -> dict:
+    if key not in THEME_LABELS:
+        return {"error": f"unknown theme '{key}'"}
+    groups = {g["key"]: g for g in theme_groups()}
+    g = groups[key]
+    tickers = g["tickers"]
+
+    injected = data is not None
+    overall = None
+    if not injected:
+        overall_all = industry_markets(start=start)
+        overall = next((r for r in overall_all["industries"] if r["key"] == key), None)
+
+    base = {"key": key, "label": g["label"], "description": g["description"], "lifecycle": g["lifecycle"],
+            "etf": REPRESENTATIVE_ETF.get(key), "overall": overall}
+    if not tickers:
+        return {**base, "subsectors": None, "tickers": [], "as_of": "",
+                "note": "No curated tickers for this theme yet — see overall for the ETF-proxy read."}
+
+    if data is None:
+        close = _download(tickers, start)
+        data = {t: (close[t] if t in close.columns else None) for t in tickers}
+
+    ticker_rows = []
+    for t in tickers:
+        px = data.get(t)
+        m = _metrics(px) if px is not None else None
+        if m is None:
+            ticker_rows.append({"symbol": t, "phase": "unknown", "color": PHASES["unknown"]["color"]})
+            continue
+        ticker_rows.append({"symbol": t, "phase": m["phase"], "color": PHASES[m["phase"]]["color"],
+                             "mom6_pct": round(m["mom6"] * 100, 1), "mom1_pct": round(m["mom1"] * 100, 1),
+                             "efficiency": m["efficiency"], "above_200d": m["above200"]})
+    ticker_by_symbol = {r["symbol"]: r for r in ticker_rows}
+
+    subsector_map = subsectors_for(key)
+    subsectors = None
+    if subsector_map:
+        by_name: dict[str, list[str]] = {}
+        for sym in tickers:
+            by_name.setdefault(subsector_map.get(sym, "Other"), []).append(sym)
+        subsectors = []
+        for name, syms in sorted(by_name.items(), key=lambda kv: (kv[0] == "Other", kv[0])):
+            syms = sorted(syms)
+            series_list = [data[s] for s in syms if data.get(s) is not None and len(data[s].dropna())]
+            synthetic = _synthetic_index(series_list) if series_list else None
+            m = _metrics(synthetic) if synthetic is not None else None
+            row = {"name": name, "tickers": syms, "ticker_detail": [ticker_by_symbol[s] for s in syms]}
+            if m is None:
+                row.update({"phase": "unknown", "color": PHASES["unknown"]["color"]})
+            else:
+                fwd = _forward_lean(m)
+                row.update({"phase": m["phase"], "color": PHASES[m["phase"]]["color"],
+                            "mom6_pct": round(m["mom6"] * 100, 1), "mom1_pct": round(m["mom1"] * 100, 1),
+                            "efficiency": m["efficiency"], "above_200d": m["above200"],
+                            "forward_lean": fwd["lean"], "accel": fwd["accel"], "past": _past_phases(synthetic)})
+            subsectors.append(row)
+
+    return {**base, "subsectors": subsectors, "tickers": None if subsectors else ticker_rows,
+            "as_of": _as_of(data, tickers),
+            "note": ("Subsector/ticker phase reads use the SAME trend/momentum engine as the theme-level ETF "
+                     "proxy, applied per-name (or to a synthetic equal-weight basket for a subsector) since no "
+                     "real ETF exists at this granularity. 'overall' is the theme's actual ETF-proxy row from "
+                     "industry_markets() for comparison. Themes with no curated subsector split (see tags."
+                     "_SUBSECTORS) list each constituent ticker flat instead.")}

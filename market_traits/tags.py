@@ -317,6 +317,12 @@ def themes_for(symbol: str) -> list:
     return list(_THEME_MAP.get(symbol.upper(), ()))
 
 
+def subsectors_for(theme_key: str) -> dict[str, str] | None:
+    """Ticker → subsector-name map for a theme, or None if the theme has no curated split
+    (caller then treats each ticker as its own flat unit — see industry_markets.industry_theme_detail)."""
+    return _SUBSECTORS.get(theme_key) or None
+
+
 def tag_symbol(symbol: str, info: dict | None) -> tuple[str, list]:
     """Return (sector, themes) for a symbol. Sector from yfinance; themes curated."""
     sector = (info or {}).get("sector") or ""
