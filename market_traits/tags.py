@@ -43,6 +43,17 @@ THEME_LABELS: dict[str, str] = {
     "energy_storage": "Energy storage / batteries",
     "weight_loss_glp1": "GLP-1 / weight-loss drugs",
     "water_scarcity": "Water scarcity / infrastructure",
+    "bci": "Brain-computer interfaces",
+    "nanotechnology": "Nanotechnology",
+    "carbon_capture": "Carbon capture & sequestration",
+    "vertical_farming": "Vertical / controlled-environment farming",
+    "fusion_energy": "Fusion energy",
+    "evtol": "eVTOL / urban air mobility",
+    "fintech_payments": "Digital payments / fintech infrastructure",
+    "hydrogen": "Hydrogen economy",
+    "crypto_infra": "Crypto / blockchain infrastructure",
+    "additive_manufacturing": "3D printing / additive manufacturing",
+    "ev_charging": "EV charging infrastructure",
     # Fading — structurally shrinking, disrupted-by-the-above-themes baskets.
     "legacy_retail": "Legacy brick-and-mortar retail",
     "ice_autos": "Internal-combustion automakers",
@@ -60,7 +71,10 @@ THEME_LIFECYCLE: dict[str, str] = {
     "quantum_computing": "emerging", "critical_minerals": "emerging", "space_satcom": "emerging",
     "autonomy": "emerging", "genomics": "emerging", "india_growth": "emerging",
     "africa_growth": "emerging", "energy_storage": "emerging", "weight_loss_glp1": "emerging",
-    "water_scarcity": "emerging",
+    "water_scarcity": "emerging", "bci": "emerging", "nanotechnology": "emerging",
+    "carbon_capture": "emerging", "vertical_farming": "emerging", "fusion_energy": "emerging",
+    "evtol": "emerging", "fintech_payments": "emerging", "hydrogen": "emerging",
+    "crypto_infra": "emerging", "additive_manufacturing": "emerging", "ev_charging": "emerging",
     "legacy_retail": "fading", "ice_autos": "fading",
     "fossil_fuels": "fading", "linear_media": "fading",
 }
@@ -86,6 +100,17 @@ THEME_DESCRIPTIONS: dict[str, str] = {
     "energy_storage": "Grid-scale and behind-the-meter batteries needed to firm intermittent renewables.",
     "weight_loss_glp1": "GLP-1 obesity/diabetes drugs — the fastest-growing pharma category in decades.",
     "water_scarcity": "Aging infrastructure + scarcity economics in utilities, filtration and treatment.",
+    "bci": "Neuromodulation and neural-interface medical devices; true BCI pure-plays (Neuralink, Synchron) remain private, so this basket is the nearest liquid public proxy.",
+    "nanotechnology": "Nanoscale materials, sensors and particle-delivery systems — a horizontal enabling technology across medicine, electronics and materials rather than one product category.",
+    "carbon_capture": "Direct-air-capture and CCS equipment/project developers; still subsidy-dependent and pre-scale, so the basket leans on a diversified major (Oxy's 1PointFive) and equipment suppliers rather than true pure-plays.",
+    "vertical_farming": "Indoor/controlled-environment produce growers; the public track record is rough (AppHarvest and Kalera both delisted/bankrupt) — treat as a high-mortality, thesis-not-yet-proven basket, not a settled winner-picking exercise.",
+    "fusion_energy": "Commercial fusion power; every true pure-play (Commonwealth Fusion, TAE, Helion) is still private, so this is a single equipment-supplier proxy, not a basket of fusion companies.",
+    "evtol": "Electric vertical-takeoff aircraft for urban air mobility; pre-revenue, certification-stage names with heavy cash burn and dilution risk.",
+    "fintech_payments": "Secular cash-to-digital payment-rail shift — one of the more mature, cash-generative themes here versus the speculative-growth baskets around it.",
+    "hydrogen": "Green/blue hydrogen production, storage and fuel cells; policy- and subsidy-sensitive, thinly profitable across the basket.",
+    "crypto_infra": "Exchanges and miners forming the on/off-ramp and infrastructure layer for crypto markets; highly correlated to BTC/crypto price cycles rather than a diversifier.",
+    "additive_manufacturing": "Industrial 3D printing for prototyping and end-part production; smaller-cap, lower-conviction theme than most others here.",
+    "ev_charging": "Public EV charging network build-out; thin, cash-burning, high-beta names — one of the weaker-conviction themes in this map.",
     "legacy_retail": "Mall-anchor department stores losing share to e-commerce and off-price, structurally.",
     "ice_autos": "Traditional automakers' core internal-combustion business, ceding share to EV-native and Chinese entrants.",
     "fossil_fuels": "Oil & gas majors — still cash-generative today, but on the losing side of a multi-decade energy transition.",
@@ -136,12 +161,12 @@ _THEME_MAP: dict[str, tuple[str, ...]] = {
     # Energy storage / batteries (grid-scale + behind-the-meter)
     "FLNC": ("energy_storage",),
     "STEM": ("energy_storage",),
-    "BE": ("energy_storage",),
     # Nuclear / uranium
     "CCJ": ("nuclear",),
     "UEC": ("nuclear",),
     "LEU": ("nuclear",),
     "SMR": ("nuclear",),
+    "OKLO": ("nuclear",),
     "BWXT": ("nuclear", "defense_space"),
     "URA": ("nuclear",),
     "URNM": ("nuclear",),
@@ -218,6 +243,46 @@ _THEME_MAP: dict[str, tuple[str, ...]] = {
     "AWK": ("water_scarcity",),
     "PNR": ("water_scarcity",),
     "CWT": ("water_scarcity",),
+    # Brain-computer interfaces (neuromodulation/neural-interface devices; nearest liquid public proxy)
+    "LIVN": ("bci",),
+    "NVRO": ("bci",),
+    "INSP": ("bci",),
+    # Nanotechnology (nanoscale materials, sensors, particle-delivery systems)
+    "NNOX": ("nanotechnology",),
+    "NVEC": ("nanotechnology",),
+    "ARWR": ("nanotechnology",),
+    # Carbon capture & sequestration (DAC/CCS equipment + project developers)
+    "GTLS": ("carbon_capture", "fusion_energy"),
+    "LNZA": ("carbon_capture",),
+    # Vertical / controlled-environment farming (rough public track record — see description)
+    "LOCL": ("vertical_farming",),
+    "VFF": ("vertical_farming",),
+    "HYFM": ("vertical_farming",),
+    # Fusion energy (GTLS above is the equipment-supplier proxy; no public pure-play exists yet)
+    # eVTOL / urban air mobility
+    "JOBY": ("evtol",),
+    "ACHR": ("evtol",),
+    # Digital payments / fintech infrastructure
+    "V": ("fintech_payments",),
+    "MA": ("fintech_payments",),
+    "PYPL": ("fintech_payments",),
+    "SQ": ("fintech_payments",),
+    # Hydrogen economy (production, storage, fuel cells)
+    "PLUG": ("hydrogen",),
+    "BLDP": ("hydrogen",),
+    "BE": ("hydrogen", "energy_storage"),
+    # Crypto / blockchain infrastructure (exchanges + miners)
+    "COIN": ("crypto_infra",),
+    "MSTR": ("crypto_infra",),
+    "MARA": ("crypto_infra",),
+    "RIOT": ("crypto_infra",),
+    # 3D printing / additive manufacturing
+    "DDD": ("additive_manufacturing",),
+    "SSYS": ("additive_manufacturing",),
+    "PRLB": ("additive_manufacturing",),
+    # EV charging infrastructure
+    "CHPT": ("ev_charging",),
+    "EVGO": ("ev_charging",),
     # Legacy brick-and-mortar retail (fading — mall department stores losing to e-commerce)
     "M": ("legacy_retail",),
     "KSS": ("legacy_retail",),
@@ -231,7 +296,7 @@ _THEME_MAP: dict[str, tuple[str, ...]] = {
     "XOM": ("fossil_fuels",),
     "CVX": ("fossil_fuels",),
     "COP": ("fossil_fuels",),
-    "OXY": ("fossil_fuels",),
+    "OXY": ("fossil_fuels", "carbon_capture"),
     # Linear TV / print media (fading — audience and ad-dollar share loss to streaming/digital)
     "PARA": ("linear_media",),
     "WBD": ("linear_media",),
