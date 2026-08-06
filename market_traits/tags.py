@@ -54,6 +54,19 @@ THEME_LABELS: dict[str, str] = {
     "crypto_infra": "Crypto / blockchain infrastructure",
     "additive_manufacturing": "3D printing / additive manufacturing",
     "ev_charging": "EV charging infrastructure",
+    "precious_metals": "Precious metals / gold & silver miners",
+    "steel_aluminum": "Steel & aluminum / reshoring capacity",
+    "agri_fertilizer": "Agri-tech / fertilizer & food security",
+    "reshoring_industrials": "Reshoring / onshoring industrials",
+    "data_privacy_identity": "Data privacy & digital identity",
+    "obesity_adjacent_devices": "Obesity-adjacent med-tech & devices",
+    "ai_agents_software": "Enterprise AI agents / software",
+    "telecom_carriers": "Telecom carriers",
+    "insurance": "Insurance",
+    "regional_banks": "Regional banks",
+    "office_reits": "Office REITs",
+    "cannabis": "Cannabis",
+    "lab_grown_protein": "Lab-grown / plant-based protein",
     # Fading — structurally shrinking, disrupted-by-the-above-themes baskets.
     "legacy_retail": "Legacy brick-and-mortar retail",
     "ice_autos": "Internal-combustion automakers",
@@ -75,8 +88,49 @@ THEME_LIFECYCLE: dict[str, str] = {
     "carbon_capture": "emerging", "vertical_farming": "emerging", "fusion_energy": "emerging",
     "evtol": "emerging", "fintech_payments": "emerging", "hydrogen": "emerging",
     "crypto_infra": "emerging", "additive_manufacturing": "emerging", "ev_charging": "emerging",
+    "precious_metals": "emerging", "steel_aluminum": "emerging", "agri_fertilizer": "emerging",
+    "reshoring_industrials": "emerging", "data_privacy_identity": "emerging",
+    "obesity_adjacent_devices": "emerging",
+    "ai_agents_software": "emerging", "telecom_carriers": "emerging", "insurance": "emerging",
+    "regional_banks": "emerging", "office_reits": "emerging", "cannabis": "emerging",
+    "lab_grown_protein": "emerging",
     "legacy_retail": "fading", "ice_autos": "fading",
     "fossil_fuels": "fading", "linear_media": "fading",
+}
+
+# Where each theme sits in the current hype/sentiment cycle (orthogonal to
+# THEME_LIFECYCLE's secular emerging/fading axis — this is momentum, not
+# direction). One of:
+#   "established"  — mature, steady demand, rarely a news-cycle darling
+#   "emerging"      — building conviction, not yet broadly chased
+#   "hyped"         — currently crowded/frothy, elevated sentiment and multiples
+#   "underrated"    — currently out of favor, but the fundamental/secular case still holds —
+#                      a mispriced-gem read (e.g. fossil-fuel majors: cash-generative, cheap,
+#                      just unloved by ESG-driven flows)
+#   "downplayed"    — currently out of favor AND the fundamental case is weak/unproven — no
+#                      mispricing thesis, just genuinely out of favor for a reason
+# This split matters for sizing: "underrated" is a contrarian-buy candidate, "downplayed" is not.
+# This is a point-in-time read (as of 2026-08), not a permanent label — revisit
+# periodically as narratives rotate. Every key in THEME_LABELS must appear here.
+THEME_HYPE_CYCLE: dict[str, str] = {
+    "ai_infra": "hyped", "semiconductors": "hyped", "cybersecurity": "established",
+    "electrification": "emerging", "nuclear": "hyped", "biotech_tools": "established",
+    "defense_space": "hyped", "healthcare_innov": "established", "robotics": "emerging",
+    "quantum_computing": "hyped", "critical_minerals": "emerging", "space_satcom": "emerging",
+    "autonomy": "underrated", "genomics": "underrated", "india_growth": "emerging",
+    "africa_growth": "emerging", "energy_storage": "established", "weight_loss_glp1": "hyped",
+    "water_scarcity": "established", "bci": "emerging", "nanotechnology": "emerging",
+    "carbon_capture": "downplayed", "vertical_farming": "downplayed", "fusion_energy": "hyped",
+    "evtol": "downplayed", "fintech_payments": "established", "hydrogen": "downplayed",
+    "crypto_infra": "hyped", "additive_manufacturing": "underrated", "ev_charging": "downplayed",
+    "precious_metals": "hyped", "steel_aluminum": "emerging", "agri_fertilizer": "established",
+    "reshoring_industrials": "emerging", "data_privacy_identity": "established",
+    "obesity_adjacent_devices": "hyped",
+    "ai_agents_software": "hyped", "telecom_carriers": "established", "insurance": "established",
+    "regional_banks": "underrated", "office_reits": "downplayed", "cannabis": "downplayed",
+    "lab_grown_protein": "downplayed",
+    "legacy_retail": "downplayed", "ice_autos": "downplayed",
+    "fossil_fuels": "underrated", "linear_media": "downplayed",
 }
 
 # One-line thesis per theme — why it's a secular basket, not just a sector label.
@@ -91,7 +145,7 @@ THEME_DESCRIPTIONS: dict[str, str] = {
     "healthcare_innov": "Novel drug modalities and med-tech platforms with structural pricing power.",
     "robotics": "Industrial, surgical and logistics automation as labor costs and reshoring both push adoption.",
     "quantum_computing": "Early-stage compute paradigm; high risk, optionality on a multi-decade horizon.",
-    "critical_minerals": "The supply-chain bottleneck shared by EVs, robotics, nuclear and defense.",
+    "critical_minerals": "The supply-chain bottleneck shared by EVs, robotics, nuclear and defense: lithium, rare-earth magnets, copper, and polysilicon.",
     "space_satcom": "Commercial launch cost collapse unlocking satellite broadband and earth observation.",
     "autonomy": "Sensors and compute for self-driving — a slower-than-hyped but structural adoption curve.",
     "genomics": "Gene editing and sequencing-driven therapeutics, distinct from the tools that serve them.",
@@ -111,6 +165,19 @@ THEME_DESCRIPTIONS: dict[str, str] = {
     "crypto_infra": "Exchanges and miners forming the on/off-ramp and infrastructure layer for crypto markets; highly correlated to BTC/crypto price cycles rather than a diversifier.",
     "additive_manufacturing": "Industrial 3D printing for prototyping and end-part production; smaller-cap, lower-conviction theme than most others here.",
     "ev_charging": "Public EV charging network build-out; thin, cash-burning, high-beta names — one of the weaker-conviction themes in this map.",
+    "precious_metals": "Gold/silver miners as an inflation and currency-debasement hedge, distinct from critical_minerals' industrial-demand framing.",
+    "steel_aluminum": "Domestic steel and aluminum capacity benefiting from tariffs, reshoring and infrastructure spend.",
+    "agri_fertilizer": "Potash/nitrogen fertilizer and farm inputs — food-security demand independent of any one crop cycle; complements vertical_farming.",
+    "reshoring_industrials": "Broader supply-chain-resilience trade — industrial capacity moving onshore/nearshore beyond any single metal or material.",
+    "data_privacy_identity": "Identity verification, consent and data-governance compliance spend, adjacent to but distinct from cybersecurity's attack-surface thesis.",
+    "obesity_adjacent_devices": "Bariatric surgery, continuous glucose monitoring and metabolic-health devices riding the same demand wave as GLP-1 drugs without drug-pricing risk.",
+    "ai_agents_software": "Enterprise software layer (agents, copilots, workflow automation) monetizing the AI buildout on the applications side, distinct from ai_infra's hardware/hyperscale layer.",
+    "telecom_carriers": "Mature, capital-intensive wireless/broadband carriers — steady cash generation, low growth, rarely a hype-cycle name.",
+    "insurance": "Property & casualty and life insurers — mature, rate-cycle-driven, defensive earnings base.",
+    "regional_banks": "Regional/mid-size US banks — deposit-funded lenders exposed to net-interest-margin and credit-cycle swings, currently out of favor post-2023 deposit-flight stress.",
+    "office_reits": "Commercial office landlords — structurally impaired by remote/hybrid work, currently the most out-of-favor real-estate subsector.",
+    "cannabis": "US cannabis operators — hyped 2018-2021 on legalization optimism, now down hard on stalled federal reform and oversupply.",
+    "lab_grown_protein": "Plant-based and cultivated-meat producers — hyped 2019-2021 IPO wave, now down sharply on weak unit economics and demand that never materialized at scale.",
     "legacy_retail": "Mall-anchor department stores losing share to e-commerce and off-price, structurally.",
     "ice_autos": "Traditional automakers' core internal-combustion business, ceding share to EV-native and Chinese entrants.",
     "fossil_fuels": "Oil & gas majors — still cash-generative today, but on the losing side of a multi-decade energy transition.",
@@ -215,6 +282,10 @@ _THEME_MAP: dict[str, tuple[str, ...]] = {
     "FCX": ("critical_minerals",),
     "SQM": ("critical_minerals",),
     "LAC": ("critical_minerals",),
+    "SCCO": ("critical_minerals",),
+    "TECK": ("critical_minerals",),
+    "USAR": ("critical_minerals",),
+    "DQ": ("critical_minerals",),
     # Space / satellite comms (commercial launch + satcom, separate from defense primes)
     "ASTS": ("space_satcom",),
     "IRDM": ("space_satcom",),
@@ -283,6 +354,72 @@ _THEME_MAP: dict[str, tuple[str, ...]] = {
     # EV charging infrastructure
     "CHPT": ("ev_charging",),
     "EVGO": ("ev_charging",),
+    # Precious metals / gold & silver miners (inflation hedge, distinct from critical_minerals)
+    "NEM": ("precious_metals",),
+    "GOLD": ("precious_metals",),
+    "AEM": ("precious_metals",),
+    "PAAS": ("precious_metals",),
+    "WPM": ("precious_metals",),
+    "KGC": ("precious_metals",),
+    # Steel & aluminum / reshoring capacity
+    "NUE": ("steel_aluminum",),
+    "STLD": ("steel_aluminum",),
+    "CLF": ("steel_aluminum",),
+    "X": ("steel_aluminum",),
+    "CENX": ("steel_aluminum",),
+    # Agri-tech / fertilizer & food security
+    "MOS": ("agri_fertilizer",),
+    "CF": ("agri_fertilizer",),
+    "NTR": ("agri_fertilizer",),
+    "ICL": ("agri_fertilizer",),
+    "DE": ("agri_fertilizer",),
+    # Reshoring / onshoring industrials (broader supply-chain-resilience trade)
+    "CAT": ("reshoring_industrials",),
+    "EMR": ("reshoring_industrials",),
+    "HON": ("reshoring_industrials",),
+    "ITW": ("reshoring_industrials",),
+    "GE": ("reshoring_industrials",),
+    # Data privacy & digital identity (adjacent to, distinct from, cybersecurity)
+    "OKTA": ("data_privacy_identity",),
+    "PING": ("data_privacy_identity",),
+    "ONTF": ("data_privacy_identity",),
+    "TWLO": ("data_privacy_identity",),
+    # Obesity-adjacent med-tech & devices (companion to weight_loss_glp1, non-drug)
+    "PODD": ("obesity_adjacent_devices",),
+    "DXCM": ("obesity_adjacent_devices",),
+    "INMD": ("obesity_adjacent_devices",),
+    "IRTC": ("obesity_adjacent_devices",),
+    # Enterprise AI agents / software (applications layer, distinct from ai_infra hardware)
+    "AI": ("ai_agents_software",),
+    "NOW": ("ai_agents_software",),
+    "CRM": ("ai_agents_software",),
+    "SNOW": ("ai_agents_software",),
+    # Telecom carriers (mature, capital-intensive wireless/broadband)
+    "T": ("telecom_carriers",),
+    "VZ": ("telecom_carriers",),
+    "TMUS": ("telecom_carriers",),
+    # Insurance (P&C and life, mature/defensive)
+    "TRV": ("insurance",),
+    "ALL": ("insurance",),
+    "PGR": ("insurance",),
+    "CB": ("insurance",),
+    # Regional banks (currently out of favor)
+    "ZION": ("regional_banks",),
+    "CMA": ("regional_banks",),
+    "KEY": ("regional_banks",),
+    "FITB": ("regional_banks",),
+    # Office REITs (currently the most out-of-favor real-estate subsector)
+    "BXP": ("office_reits",),
+    "VNO": ("office_reits",),
+    "SLG": ("office_reits",),
+    # Cannabis (hyped 2018-2021, down since)
+    "TLRY": ("cannabis",),
+    "CGC": ("cannabis",),
+    "CRON": ("cannabis",),
+    # Lab-grown / plant-based protein (hyped 2019-2021, down since)
+    "BYND": ("lab_grown_protein",),
+    "OTLY": ("lab_grown_protein",),
+    "STKL": ("lab_grown_protein",),
     # Legacy brick-and-mortar retail (fading — mall department stores losing to e-commerce)
     "M": ("legacy_retail",),
     "KSS": ("legacy_retail",),
@@ -347,7 +484,9 @@ _SUBSECTORS: dict[str, dict[str, str]] = {
     },
     "critical_minerals": {
         "ALB": "Lithium", "SQM": "Lithium", "LAC": "Lithium",
-        "MP": "Rare earths", "FCX": "Copper",
+        "MP": "Rare earths", "USAR": "Rare-earth magnets",
+        "FCX": "Copper", "SCCO": "Copper", "TECK": "Copper",
+        "DQ": "Polysilicon",
     },
 }
 
@@ -374,6 +513,15 @@ THEME_ETFS: dict[str, str] = {
     "CARZ": "ice_autos",
     "XLE": "fossil_fuels", "XOP": "fossil_fuels",
     "PBS": "linear_media",
+    "GDX": "precious_metals", "GDXJ": "precious_metals", "SIL": "precious_metals",
+    "SLX": "steel_aluminum",
+    "MOO": "agri_fertilizer", "SOIL": "agri_fertilizer",
+    "PAVE": "reshoring_industrials",
+    "IGV": "ai_agents_software",
+    "IYZ": "telecom_carriers", "VOX": "telecom_carriers",
+    "KIE": "insurance", "IAK": "insurance",
+    "KRE": "regional_banks", "IAT": "regional_banks",
+    "MJ": "cannabis", "MSOS": "cannabis",
 }
 
 
@@ -428,6 +576,7 @@ def theme_groups() -> list[dict]:
             "label": label,
             "description": THEME_DESCRIPTIONS.get(key, ""),
             "lifecycle": THEME_LIFECYCLE.get(key, "emerging"),
+            "hype_cycle": THEME_HYPE_CYCLE.get(key, "emerging"),
             "tickers": tickers,
             "subsectors": subsectors,
             "etfs": sorted(etfs_by_theme.get(key, [])),
