@@ -42,6 +42,12 @@ REPRESENTATIVE_ETF: dict[str, str] = {
     "africa_growth": "EZA", "energy_storage": "LIT", "weight_loss_glp1": "XLV",
     "water_scarcity": "PHO",
     "legacy_retail": "XRT", "ice_autos": "CARZ", "fossil_fuels": "XLE", "linear_media": "PBS",
+    "pharmaceuticals": "XPH", "airlines": "JETS", "homebuilders": "ITB", "chemicals": "XLB",
+    "utilities_water_gas": "XLU", "medical_devices": "IHI", "reits_diversified": "VNQ",
+    "mining_diversified": "PICK", "gaming": "ESPO", "ecommerce_platforms": "IBUY",
+    "fintech_payments": "IPAY", "crypto_infra": "BLOK", "hydrogen": "HDRO",
+    "packaged_food": "PBJ", "beverages": "PBJ", "travel_leisure": "PEJ",
+    "construction_engineering": "PAVE", "waste_management": "XLI",
 }
 
 
@@ -62,16 +68,48 @@ def industry_markets(*, start: str = "2022-01-01", data=None, ttl: int = 3600,
     return out
 
 
+def _synthetic_basket(close, tickers: list[str]):
+    """Equal-weight index from a theme's own constituent tickers, for themes with no ETF proxy
+    at all (mostly narrow/frontier niches). Normalizes each ticker to 1.0 at its first available
+    date, then averages across whatever tickers have data on a given day."""
+    import pandas as pd
+    cols = [t for t in tickers if t in close.columns]
+    if not cols:
+        return None
+    sub = close[cols].dropna(how="all")
+    if sub.empty:
+        return None
+    normed = sub / sub.bfill().iloc[0]
+    return normed.mean(axis=1)
+
+
 def _compute(*, start: str, data=None,
              valuation_fn: Optional[Callable[[list], list]] = None,
              geo_fn: Optional[Callable[[list], list]] = None) -> dict:
     groups = theme_groups()
     etf_by_theme = {k: v for k, v in REPRESENTATIVE_ETF.items() if k in THEME_LABELS}
+    # fall back to the theme's first curated proxy ETF (tags.THEME_ETFS) for themes without a
+    # hand-picked REPRESENTATIVE_ETF entry, instead of silently rendering blank cards.
+    for g in groups:
+        key = g["key"]
+        if key not in etf_by_theme and g.get("etfs"):
+            etf_by_theme[key] = g["etfs"][0]
     etfs = sorted(set(etf_by_theme.values()))
+    # themes with neither a curated nor a THEME_ETFS proxy: fall back to a synthetic basket of
+    # their own constituent tickers, so genuinely thin/frontier themes still get real data instead
+    # of "unknown".
+    basket_tickers = sorted({t for g in groups if g["key"] not in etf_by_theme
+                              for t in g.get("tickers", [])})
     injected = data is not None
     if data is None:
         close = _download(etfs, start)
         data = {e: (close[e] if e in close.columns else None) for e in etfs}
+        if basket_tickers:
+            basket_close = _download(basket_tickers, start)
+            for g in groups:
+                key = g["key"]
+                if key not in etf_by_theme and g.get("tickers"):
+                    data[f"__basket_{key}"] = _synthetic_basket(basket_close, g["tickers"])
 
     # skip the extra fundamentals/valuation + per-ticker geo lookups when prices are injected (tests)
     # or the caller didn't wire in valuation_fn/geo_fn — same convention as global_markets.py's pe_fn gating.
@@ -83,7 +121,7 @@ def _compute(*, start: str, data=None,
     for g in groups:
         key, label = g["key"], g["label"]
         etf = etf_by_theme.get(key)
-        px = data.get(etf) if etf else None
+        px = data.get(etf) if etf else data.get(f"__basket_{key}")
         m = _metrics(px) if px is not None else None
         geography = geo_fn(g.get("tickers", [])) if (geo_fn and not injected and g.get("tickers")) else []
         base = {"key": key, "label": label, "description": THEME_DESCRIPTIONS.get(key, ""),
