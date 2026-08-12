@@ -6,12 +6,23 @@ chop, per the regime split); mean-reversion prefers calm range. So we score five
 "weather" the whole book can gate on: trend, breadth, trending-vs-choppy (Kaufman efficiency), volatility, and
 credit risk-appetite. Reports PAST (a daily score history), CURRENT (the regime now), and a FORWARD read (regimes
 are sticky — this is a persistence tilt, honestly, not a crash forecast). Free daily data; everything injectable.
+
+`ladder_read()` extends this with a store-of-value read: equities/gold/bonds/housing momentum + volatility
+percentiles, an inflation trend (free BLS CPI), and a plain-language "what this means for the horizon ladder"
+verdict picked from a decision table (not a single template) — plus per-asset "is this a good window to trade or
+hold this" callouts, each backed by a stated percentile threshold. This is explicitly NOT a timing signal: three
+independent signal families (price momentum, CPI surprise, HMM regime detection) were tested for switching the
+ladder's allocations and all three were rejected (see Market-Analysis repo memory). This function only describes
+current conditions for a human to weigh — it never recommends switching assets.
 """
 from __future__ import annotations
 
 from typing import Optional
 
 _SECTORS = ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLC"]
+_LADDER_ASSETS = {"equities": "SPY", "gold": "GLD", "bonds": "TLT"}
+_CPI_SERIES = "CUSR0000SA0"
+_HOUSING_SERIES = "CSUSHPINSA"  # Case-Shiller US National Home Price Index, FRED, monthly, ~2mo publication lag
 
 
 def _closes(sym, start):
@@ -75,6 +86,225 @@ def weather_series(*, start: str = "2018-01-01", data=None) -> dict:
     return {"series": rows, "dates": list(rows.keys())}
 
 
+def _fred_series(series_id: str, start: str = "2010-01-01") -> dict:
+    """Free, keyless FRED CSV export — no API key needed. {date_str: value}, "." (missing) dropped.
+    Shells out to curl rather than urllib/requests: this host's Python socket stack reliably stalls reading
+    fred.stlouisfed.org's response (a proxy/TLS-stack quirk, not a real network block). Also: sending a spoofed
+    User-Agent to this specific endpoint reliably kills the HTTP/2 stream (curl exit 92, INTERNAL_ERROR) — use
+    curl's own default UA, unlike the BLS fetch below which needs a UA override to avoid a 403."""
+    import subprocess, csv, io
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}"
+    raw = subprocess.run(["curl", "-sf", "--max-time", "20", url],
+                         capture_output=True, timeout=25, check=True).stdout.decode()
+    out = {}
+    for row in list(csv.reader(io.StringIO(raw)))[1:]:
+        if len(row) == 2 and row[1] not in (".", ""):
+            try:
+                out[row[0]] = float(row[1])
+            except ValueError:
+                continue
+    return out
+
+
+def _bls_series(series_id: str, start_year: int, end_year: int) -> list:
+    """Free, keyless BLS v2 API (needs a non-default User-Agent from some hosts, or it 403s). [(date, value)]."""
+    import urllib.request, json
+    from datetime import date
+    out = {}
+    y = start_year
+    while y <= end_year:
+        y2 = min(y + 9, end_year)
+        body = json.dumps({"seriesid": [series_id], "startyear": str(y), "endyear": str(y2)}).encode()
+        req = urllib.request.Request("https://api.bls.gov/publicAPI/v2/timeseries/data/", data=body,
+                                      headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
+        try:
+            d = json.loads(urllib.request.urlopen(req, timeout=20).read())
+            if d.get("status") == "REQUEST_SUCCEEDED":
+                for row in d["Results"]["series"][0]["data"]:
+                    if row["period"].startswith("M") and row["period"] != "M13" and row["value"] not in ("-", ""):
+                        out[date(int(row["year"]), int(row["period"][1:]), 1)] = float(row["value"])
+        except Exception:
+            pass
+        y = y2 + 1
+    return sorted(out.items())
+
+
+def _pctile(x: float, hist: list) -> float:
+    """Rank of x within hist, 0-1. Empty/degenerate history -> 0.5 (neutral, not a claim)."""
+    hist = [h for h in hist if h == h]  # drop NaN
+    if len(hist) < 20:
+        return 0.5
+    return sum(1 for h in hist if h <= x) / len(hist)
+
+
+def asset_snapshot(*, data=None) -> dict:
+    """Per-asset momentum + volatility-percentile read for equities/gold/bonds, plus inflation trend and housing.
+    All thresholds are percentile-based against the asset's OWN trailing history — never a fixed magic number —
+    so "elevated vol" means elevated for THIS asset, not an arbitrary cross-asset cutoff."""
+    import statistics
+    closes = {}
+    if data is not None and "ladder_closes" in data:
+        closes = data["ladder_closes"]
+    else:
+        for name, sym in _LADDER_ASSETS.items():
+            try:
+                closes[name] = _closes(sym, "2015-01-01")
+            except Exception:
+                continue
+
+    rows = {}
+    for name, s in closes.items():
+        s = s.dropna()
+        if len(s) < 260:
+            continue
+        ret = s.pct_change().dropna()
+        vol21 = ret.rolling(21).std().dropna()
+        cur_vol = float(vol21.iloc[-1]) if len(vol21) else None
+        vol_hist = vol21.tail(504).tolist() if len(vol21) else []
+        vol_pctile = _pctile(cur_vol, vol_hist) if cur_vol is not None else None
+        ma200 = s.rolling(200).mean()
+        dist200 = float(s.iloc[-1] / ma200.iloc[-1] - 1) if ma200.iloc[-1] == ma200.iloc[-1] else None
+        dist_hist = (s / ma200 - 1).dropna().tail(504).tolist()
+        dist_pctile = _pctile(dist200, dist_hist) if dist200 is not None else None
+        rows[name] = {
+            "last": round(float(s.iloc[-1]), 2),
+            "ret_1m_pct": round(float(s.iloc[-1] / s.iloc[-22] - 1) * 100, 2) if len(s) > 22 else None,
+            "ret_3m_pct": round(float(s.iloc[-1] / s.iloc[-66] - 1) * 100, 2) if len(s) > 66 else None,
+            "ret_12m_pct": round(float(s.iloc[-1] / s.iloc[-252] - 1) * 100, 2) if len(s) > 252 else None,
+            "vol_ann_pct": round(cur_vol * (252 ** 0.5) * 100, 2) if cur_vol is not None else None,
+            "vol_pctile": round(vol_pctile, 2) if vol_pctile is not None else None,
+            "trend_dist_200d_pct": round(dist200 * 100, 2) if dist200 is not None else None,
+            "trend_pctile": round(dist_pctile, 2) if dist_pctile is not None else None,
+        }
+
+    cpi = {}
+    try:
+        levels = _bls_series(_CPI_SERIES, 2015, 2027)  # [(date, index_level)]
+        yoy = [(d, (v / levels[i - 12][1] - 1) * 100) for i, (d, v) in enumerate(levels) if i >= 12]
+        if yoy:
+            last_yoy = yoy[-1][1]
+            trend3 = yoy[-1][1] - yoy[-4][1] if len(yoy) >= 4 else 0.0
+            cpi = {
+                "yoy_pct": round(last_yoy, 2),
+                "trend_3mo_change_pp": round(trend3, 2),
+                "direction": "accelerating" if trend3 > 0.3 else ("cooling" if trend3 < -0.3 else "stable"),
+                "as_of": yoy[-1][0].isoformat(),
+            }
+    except Exception:
+        pass
+
+    housing = {}
+    try:
+        hs = _fred_series(_HOUSING_SERIES, "2015-01-01")
+        items = sorted(hs.items())
+        if len(items) >= 14:
+            last_d, last_v = items[-1]
+            yoy_v = next((v for d, v in items if d[:4] == str(int(last_d[:4]) - 1) and d[5:7] == last_d[5:7]), None)
+            yoy_pct = (last_v / yoy_v - 1) * 100 if yoy_v else None
+            trend3 = items[-1][1] / items[-4][1] - 1 if len(items) >= 4 else None
+            housing = {
+                "index": round(last_v, 2), "as_of": last_d,
+                "yoy_pct": round(yoy_pct, 2) if yoy_pct is not None else None,
+                "direction": ("accelerating" if trend3 and trend3 > 0.005 else
+                             "cooling" if trend3 and trend3 < -0.005 else "stable") if trend3 is not None else None,
+                "note": "Case-Shiller, monthly, ~2mo publication lag — never a tactical/timing instrument, only a "
+                        "structural read for the 7yr+ ladder bucket.",
+            }
+    except Exception:
+        pass
+
+    return {"assets": rows, "inflation": cpi, "housing": housing}
+
+
+def _ladder_verdict(regime_code: str, cpi: dict, assets: dict) -> str:
+    """Plain-language 'what this means for the horizon ladder' — picked from a decision table keyed on the
+    already-computed weather regime + inflation direction + which asset (if any) shows elevated vol/stretch.
+    Deliberately descriptive, not a switch signal: [[store-of-value-timing-thread-closed]] rejected 3 independent
+    signal families for actively timing ladder-bucket switches — this only narrates current conditions."""
+    infl_dir = cpi.get("direction", "stable")
+    gold = assets.get("gold", {})
+    equities = assets.get("equities", {})
+    bonds = assets.get("bonds", {})
+    gold_hot = (gold.get("vol_pctile") or 0) >= 0.70
+    eq_stretched = (equities.get("trend_pctile") or 0.5) >= 0.85
+    eq_washed_out = (equities.get("trend_pctile") or 0.5) <= 0.15
+    bonds_selling_off = (bonds.get("ret_3m_pct") or 0) < -3
+
+    if regime_code == "risk_off":
+        return ("Risk-off tape. This is the environment the near-term (0-6mo) cash/T-bill bucket exists for — "
+                "capital preservation over any risky-asset bucket right now, regardless of what inflation is doing.")
+    if infl_dir == "accelerating" and gold_hot and bonds_selling_off:
+        return ("Inflation accelerating, gold volatility elevated, and bonds selling off together — the classic "
+                "stagflation-scare signature. This is exactly the environment the 15% structural gold allocation "
+                "in the 2-7yr and 7yr+ buckets exists for; it's earning its keep as ballast, not something to "
+                "chase or resize.")
+    if infl_dir == "cooling" and regime_code == "risk_on_trending" and not eq_stretched:
+        return ("Inflation cooling with a trending risk-on tape and equities not yet stretched — a fairly benign "
+                "setup for the growth-heavy 7yr+ bucket. No asset here is signaling distress; the static "
+                "allocation is doing what it's supposed to without needing a second look.")
+    if eq_stretched:
+        return ("Equities are trend-extended (top of their own 200d-distance range) — new equity-heavy "
+                "allocations right now are entering at a stretched point in the cycle, not a rich one. Doesn't "
+                "argue for exiting the 7yr+ bucket's equity weight, just for not over-adding beyond target.")
+    if eq_washed_out:
+        return ("Equities are washed out relative to trend (bottom of their own 200d-distance range) — if you're "
+                "DEPLOYING new money into the 2-7yr/7yr+ buckets on a calendar schedule, this is a relatively "
+                "better entry than a stretched one, though the whole point of a static ladder is not needing to "
+                "time this.")
+    if gold_hot:
+        return ("Gold's realized volatility is in the top third of its own 2yr range. Gold in this ladder is held "
+                "structurally as ballast (fixed 15%), not actively traded — elevated vol here is a reason for "
+                "position-sizing discipline if anyone in the household DOES trade gold tactically elsewhere, not a "
+                "reason to touch the static allocation.")
+    return ("No asset class is showing a stretched or elevated reading right now — a quiet environment where the "
+            "static horizon-ladder allocation needs no attention beyond its normal calendar rebalance.")
+
+
+def _trade_reads(assets: dict) -> list:
+    """Per-asset 'is now a good window to actively trade or add to this' callout — each backed by a stated
+    percentile against the asset's OWN trailing 2yr history, not a fixed number. Distinct from `_ladder_verdict`:
+    this is asset-by-asset detail, that's the one-paragraph synthesis."""
+    out = []
+    labels = {"equities": "Equities", "gold": "Gold", "bonds": "Bonds"}
+    for key, label in labels.items():
+        a = assets.get(key)
+        if not a or a.get("vol_pctile") is None or a.get("trend_pctile") is None:
+            continue
+        vp, tp = a["vol_pctile"], a["trend_pctile"]
+        if vp >= 0.70:
+            read = (f"{label}: realized volatility in the top {round((1 - vp) * 100)}% of its own 2yr range — "
+                    "better suited to active/tactical trading (bigger moves both ways) than to treating as a "
+                    "stable store of value in the near term.")
+        elif vp <= 0.20:
+            read = (f"{label}: unusually calm — bottom {round(vp * 100)}% of its own 2yr volatility range. Good "
+                    "conditions for holding as static ballast; a quiet stretch for active trading (smaller moves "
+                    "to trade around).")
+        elif tp >= 0.85:
+            read = f"{label}: trend-extended relative to its own recent range — not an ideal fresh entry point."
+        elif tp <= 0.15:
+            read = f"{label}: below its own recent trend range — a relatively better entry than a stretched one."
+        else:
+            read = f"{label}: trading within its normal range on both trend and volatility — no notable read."
+        out.append({"asset": key, "label": label, "vol_pctile": vp, "trend_pctile": tp, "read": read})
+    return out
+
+
+def ladder_read(*, weather: dict, data=None) -> dict:
+    """Combines the existing regime read with the asset-class snapshot into the ladder-facing section."""
+    snap = asset_snapshot(data=data)
+    verdict = _ladder_verdict(weather.get("regime_code", "mixed"), snap["inflation"], snap["assets"])
+    return {
+        "assets": snap["assets"],
+        "inflation": snap["inflation"],
+        "housing": snap["housing"],
+        "ladder_verdict": verdict,
+        "trade_reads": _trade_reads(snap["assets"]),
+        "caveat": ("Descriptive only — this section reads current conditions, it does not recommend switching "
+                   "assets. Three independent signal families (price momentum, CPI-surprise, HMM regime "
+                   "detection) were tested for timing ladder-bucket switches and all three were rejected."),
+    }
+
+
 def _regime(score, comp) -> dict:
     # `code` is the STRUCTURED key downstream gates should use (never the emoji label — that's for display).
     er = comp["efficiency"]
@@ -123,7 +353,7 @@ def _compute_weather(*, start: str = "2018-01-01", data=None) -> dict:
         "score_20d_change": slope,
         "confidence": "regimes are sticky, so near-term persistence is the base rate — NOT a crash/rally forecast",
     }
-    return {
+    out = {
         "as_of": dates[-1], "score": cur["score"], "regime": reg["label"], "regime_code": reg["code"],
         "for_book": reg["for_book"],
         "components": {k: cur[k] for k in ("trend", "breadth", "efficiency", "calm", "risk_appetite")},
@@ -133,3 +363,8 @@ def _compute_weather(*, start: str = "2018-01-01", data=None) -> dict:
                  "and credit risk-appetite. Complements the crisis gauge. It says which conditions FAVOUR which "
                  "strategies — breakout wants ☀️ trending, mean-reversion/carry prefer 🌀 chop."),
     }
+    try:
+        out["ladder"] = ladder_read(weather=out, data=data)
+    except Exception as exc:
+        out["ladder"] = {"error": f"ladder read unavailable ({str(exc)[:80]})"}
+    return out
