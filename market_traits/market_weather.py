@@ -35,6 +35,10 @@ _CPI_SERIES = "CUSR0000SA0"
 _HOUSING_SERIES = "CSUSHPINSA"  # Case-Shiller US National Home Price Index, FRED, monthly, ~2mo publication lag
 _HY_OAS_SERIES = "BAMLH0A0HYM2"  # ICE BofA US High Yield Index Option-Adjusted Spread, FRED, daily
 _CLAIMS_SERIES = "ICSA"  # Initial jobless claims, FRED, weekly
+_CURVE_SERIES = "T10Y2Y"  # 10y-2y Treasury spread, FRED, daily. Inversion = classic late-cycle warning.
+_RECESSION_SERIES = "USREC"  # NBER-based recession indicator, FRED, monthly, 1 = in recession
+_UNRATE_SERIES = "UNRATE"  # Unemployment rate, FRED, monthly
+_DEBT_GDP_SERIES = "GFDEGDQ188S"  # Federal debt as % of GDP, FRED, quarterly
 
 
 def _closes(sym, start):
@@ -495,6 +499,183 @@ def ladder_read(*, weather: dict, data=None) -> dict:
     return out
 
 
+_DEBT_CYCLE_STAGES = {
+    # Dalio's short-term debt cycle, collapsed to 4 stages a monthly rule can classify from free FRED data.
+    # code -> (label, what's happening, investing guidance FOR THIS STAGE — sizing/tilt within the existing
+    # static horizon ladder, never a call to abandon it; see store-of-value-timing-thread-closed).
+    "bust_deleveraging": {
+        "label": "Bust / deleveraging",
+        "what": ("NBER-recession conditions: credit contracting, growth negative, the leverage built up in the "
+                 "prior boom stage unwinding. This is the stage the Fed/gov CAN soften (rate cuts, QE, fiscal "
+                 "transfers) but can't skip — every prior soft landing pushed the leverage further into the "
+                 "system rather than removing it, which is why the cycle keeps recurring."),
+        "invest": ("Capital preservation first — this is what the 0-6mo cash/T-bill bucket exists for. Once "
+                   "spreads/equities are visibly washed out (not just down), this is historically the highest "
+                   "risk-adjusted window to deploy dry powder into the 2-7yr/7yr+ equity sleeves at target "
+                   "weight — not overweight, just don't skip a scheduled contribution here. Avoid selling gold "
+                   "or long bonds into the panic; they're the ballast this stage is for."),
+    },
+    "early_cycle": {
+        "label": "Early-cycle recovery",
+        "what": ("Within ~18 months of the last recession's end. Credit is still cautious, valuations reset, "
+                 "the yield curve is typically steep (short rates cut hard, long rates anchored) — the healthiest "
+                 "part of the cycle to be adding risk, because leverage hasn't rebuilt yet."),
+        "invest": ("Good environment to be at or slightly ahead of target equity weight if a scheduled "
+                   "contribution is due; the asymmetry favors being early here over waiting for confirmation. "
+                   "Gold/TIPS sleeve stays at target — it's not this stage's job to earn its keep, the next one is."),
+    },
+    "mid_cycle": {
+        "label": "Mid-cycle expansion",
+        "what": ("Growth expanding, curve still positively sloped, no acute stress signature. The unremarkable "
+                 "middle of the cycle — leverage is building but hasn't reached the point where the curve or "
+                 "credit market is flagging it yet."),
+        "invest": ("Nothing to do — proceed at normal target weights on the normal calendar schedule. This is "
+                   "the stage the static ladder is designed to be boring in."),
+    },
+    "late_cycle_boom": {
+        "label": "Late-cycle boom",
+        "what": ("The yield curve has inverted (or credit spreads are at multi-year tights while debt/GDP keeps "
+                 "climbing) — the classic pre-recession leverage-and-euphoria signature. Historically this is "
+                 "where the deferral mechanism (rate cuts avoiding the LAST slowdown) is most visible: debt has "
+                 "kept compounding on top of debt rather than being paid down, and short rates are now high "
+                 "enough to start choking it off."),
+        "invest": ("Don't chase — proceed with scheduled contributions at target weight, not overweight. This is "
+                   "the stage to make sure the 0-6mo cash bucket is actually topped up to target (not drifted "
+                   "down from spending risk assets' gains) so there's real dry powder when the bust stage "
+                   "arrives, and to lean on the gold/TIPS sleeve as the stagflation/confidence hedge rather than "
+                   "trimming it for looking like dead weight in a rising market."),
+    },
+}
+
+
+def _classify_debt_cycle(dates, curve, recession, unrate, debt_gdp_yoy, hy_oas_pctile) -> list:
+    """Rule-based monthly stage assignment. Returns list of stage codes aligned to `dates`."""
+    stages = []
+    months_since_recession = None
+    for i, d in enumerate(dates):
+        rec = recession[i]
+        if rec == 1:
+            stages.append("bust_deleveraging")
+            months_since_recession = 0
+            continue
+        if months_since_recession is not None:
+            months_since_recession += 1
+        if months_since_recession is not None and months_since_recession <= 18:
+            stages.append("early_cycle")
+            continue
+        c = curve[i]
+        dg = debt_gdp_yoy[i] if i < len(debt_gdp_yoy) else None
+        hy = hy_oas_pctile[i] if i < len(hy_oas_pctile) else None
+        late_signature = (c is not None and c == c and c < 0) or (
+            dg is not None and dg == dg and dg > 3.0 and hy is not None and hy == hy and hy <= 0.25
+        )
+        stages.append("late_cycle_boom" if late_signature else "mid_cycle")
+    return stages
+
+
+def debt_cycle_read(*, start: str = "1990-01-01", data=None) -> dict:
+    """Dalio-style boom/bust (short-term debt cycle) read: monthly stage history for the graph, plus current
+    stage / what preceded it / plain-language investing guidance for that stage — all scoped to sizing/tilt
+    WITHIN the existing static horizon ladder (see store-of-value-timing-thread-closed), never a call to switch
+    bucket weights or time an exit. Free FRED data only: 10y-2y curve, NBER recession flag, unemployment, HY OAS
+    (reused from weather_series), and Federal debt/GDP."""
+    import pandas as pd
+
+    if data is not None and "debt_cycle_raw" in data:
+        curve_raw, rec_raw, unrate_raw, debt_raw, hy_raw = data["debt_cycle_raw"]
+    else:
+        curve_raw = _fred_series(_CURVE_SERIES, start)
+        rec_raw = _fred_series(_RECESSION_SERIES, start)
+        unrate_raw = _fred_series(_UNRATE_SERIES, start)
+        debt_raw = _fred_series(_DEBT_GDP_SERIES, "1985-01-01")
+        hy_raw = _fred_series(_HY_OAS_SERIES, start)
+
+    def _monthly(raw: dict) -> "pd.Series":
+        s = pd.Series(raw)
+        s.index = pd.to_datetime(s.index)
+        return s.sort_index().resample("MS").last()
+
+    curve_m = _monthly(curve_raw)
+    rec_m = _monthly(rec_raw)
+    unrate_m = _monthly(unrate_raw)
+    debt_m = _monthly(debt_raw).reindex(curve_m.index, method="ffill")
+    hy_m = _monthly(hy_raw)
+
+    idx = curve_m.index.intersection(rec_m.index).intersection(unrate_m.index)
+    idx = idx[idx >= pd.Timestamp(start)]
+    if len(idx) < 24:
+        return {"error": "insufficient FRED history for debt-cycle read"}
+
+    curve = curve_m.reindex(idx)
+    rec = rec_m.reindex(idx)
+    unrate = unrate_m.reindex(idx)
+    debt = debt_m.reindex(idx)
+    debt_yoy = (debt / debt.shift(12) - 1) * 100
+    hy = hy_m.reindex(idx, method="ffill")
+    hy_pctile = hy.rolling(60, min_periods=20).apply(lambda w: (w <= w.iloc[-1]).mean(), raw=False)
+
+    dates = [str(d)[:10] for d in idx]
+    stages = _classify_debt_cycle(
+        dates, curve.tolist(), rec.tolist(), unrate.tolist(), debt_yoy.tolist(), hy_pctile.tolist()
+    )
+    stage_code = {"bust_deleveraging": 4, "early_cycle": 1, "mid_cycle": 2, "late_cycle_boom": 3}
+    numeric = [stage_code[s] for s in stages]
+
+    cur = stages[-1]
+    # find the prior distinct stage and how long the current one has held
+    months_in_stage = 1
+    for s in reversed(stages[:-1]):
+        if s == cur:
+            months_in_stage += 1
+        else:
+            break
+    prior_stage = None
+    for s in reversed(stages[: len(stages) - months_in_stage]):
+        if s != cur:
+            prior_stage = s
+            break
+
+    info = _DEBT_CYCLE_STAGES[cur]
+    prior_label = _DEBT_CYCLE_STAGES[prior_stage]["label"] if prior_stage else None
+    verdict = (
+        f"**Where we are:** {info['label']} — in this stage for {months_in_stage} month"
+        f"{'s' if months_in_stage != 1 else ''} so far. {info['what']}"
+    )
+    if prior_label:
+        verdict += f" **What came before:** the prior stage was {prior_label}."
+    next_read = {
+        "bust_deleveraging": "Base rate: this resolves into an early-cycle recovery, though the timing is not forecastable.",
+        "early_cycle": "Base rate: transitions into mid-cycle expansion as the recovery matures — no signal times this, it's a persistence read.",
+        "mid_cycle": "Base rate: continues until either a late-cycle warning signature (curve inversion) appears or a recession hits directly — both are monitored here, neither is predicted in advance.",
+        "late_cycle_boom": "Base rate: this stage has historically preceded a recession by a few quarters to ~2 years — a warning window, not a countdown.",
+    }
+    verdict += f" **What's next:** {next_read[cur]}"
+
+    return {
+        "history": {"dates": dates, "stage_code": numeric, "stage_label": stages,
+                     "recession_flag": [int(r) if r == r else 0 for r in rec.tolist()]},
+        "current_stage": cur,
+        "current_stage_label": info["label"],
+        "months_in_stage": months_in_stage,
+        "prior_stage": prior_stage,
+        "prior_stage_label": prior_label,
+        "verdict": verdict,
+        "investing_guidance": info["invest"],
+        "components": {
+            "curve_10y2y": round(float(curve.iloc[-1]), 3) if curve.iloc[-1] == curve.iloc[-1] else None,
+            "unemployment_pct": round(float(unrate.iloc[-1]), 2) if unrate.iloc[-1] == unrate.iloc[-1] else None,
+            "debt_gdp_yoy_pp": round(float(debt_yoy.iloc[-1]), 2) if debt_yoy.iloc[-1] == debt_yoy.iloc[-1] else None,
+            "hy_oas_pctile_5y": round(float(hy_pctile.iloc[-1]), 2) if hy_pctile.iloc[-1] == hy_pctile.iloc[-1] else None,
+        },
+        "caveat": ("Descriptive stage classification from free macro data (10y-2y curve, NBER recession flag, "
+                   "unemployment, Federal debt/GDP, HY credit spreads) — a base-rate/persistence read, not a "
+                   "timing signal. The 'what's next' line states historical tendency, never a forecast date. "
+                   "Guidance is scoped to sizing/tilt discipline WITHIN the existing static ladder; three "
+                   "independent signal families were already tested and rejected for actively timing ladder "
+                   "switches (store-of-value-timing-thread-closed)."),
+    }
+
+
 def _regime(score, comp) -> dict:
     # `code` is the STRUCTURED key downstream gates should use (never the emoji label — that's for display).
     er = comp["efficiency"]
@@ -567,4 +748,8 @@ def _compute_weather(*, start: str = "2018-01-01", data=None) -> dict:
         out["ladder"] = ladder_read(weather=out, data=data)
     except Exception as exc:
         out["ladder"] = {"error": f"ladder read unavailable ({str(exc)[:80]})"}
+    try:
+        out["debt_cycle"] = debt_cycle_read(data=data)
+    except Exception as exc:
+        out["debt_cycle"] = {"error": f"debt-cycle read unavailable ({str(exc)[:80]})"}
     return out
