@@ -20,7 +20,12 @@ from __future__ import annotations
 from typing import Optional
 
 _SECTORS = ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLC"]
-_LADDER_ASSETS = {"equities": "SPY", "gold": "GLD", "bonds": "TLT"}
+_LADDER_ASSETS = {"equities": "SPY", "gold": "GLD", "bonds": "TLT", "crypto": "BTC-USD"}
+# BTC halving-cycle bottom-timing calibration (Market-Analysis repo memory: btc-halving-cycle-bottom-watch,
+# 2026-08-13). Top-anchored, real-time-detectable drawdown trigger -> bottom lag, calibrated off the two
+# fully data-verified cycles (2017, 2021 tops; 2013 predates free daily history). n=2 — descriptive watch-item
+# only, same as every other ladder read here, never a switching signal.
+_BTC_CYCLE_TRIGGERS = {-0.20: (358, 360), -0.30: (350, 346)}
 _CPI_SERIES = "CUSR0000SA0"
 _HOUSING_SERIES = "CSUSHPINSA"  # Case-Shiller US National Home Price Index, FRED, monthly, ~2mo publication lag
 
@@ -301,7 +306,7 @@ def _trade_reads(assets: dict) -> list:
     percentile against the asset's OWN trailing 2yr history, not a fixed number. Distinct from `_ladder_verdict`:
     this is asset-by-asset detail, that's the one-paragraph synthesis."""
     out = []
-    labels = {"equities": "Equities", "gold": "Gold", "bonds": "Bonds"}
+    labels = {"equities": "Equities", "gold": "Gold", "bonds": "Bonds", "crypto": "Crypto (BTC)"}
     for key, label in labels.items():
         a = assets.get(key)
         if not a or a.get("vol_pctile") is None or a.get("trend_pctile") is None:
@@ -325,12 +330,66 @@ def _trade_reads(assets: dict) -> list:
     return out
 
 
+def _btc_cycle_read(*, data=None) -> Optional[dict]:
+    """Where BTC sits in its halving-cycle top->bottom drawdown, and the bottom window implied by the
+    -20%/-30% trigger->bottom lag calibrated off the 2017 and 2021 cycles (see _BTC_CYCLE_TRIGGERS). n=2 —
+    descriptive watch-item, not a signal; same caveat as the rest of this module's ladder reads."""
+    import pandas as pd
+    from datetime import timedelta
+
+    if data is not None and "ladder_closes" in data and "crypto" in data["ladder_closes"]:
+        closes = data["ladder_closes"]["crypto"]
+    else:
+        try:
+            closes = _closes("BTC-USD", "2014-01-01")
+        except Exception:
+            return None
+    closes = closes.dropna()
+    if closes.empty:
+        return None
+
+    cum_max = closes.cummax()
+    drawdown = closes / cum_max - 1
+    at_ath = closes >= cum_max
+    ath_date = closes.index[at_ath][-1]
+    ath_price = float(closes.loc[ath_date])
+    cur_price = float(closes.iloc[-1])
+
+    out = {
+        "ath_date": str(ath_date)[:10],
+        "ath_price": round(ath_price, 2),
+        "price": round(cur_price, 2),
+        "drawdown_from_ath_pct": round((cur_price / ath_price - 1) * 100, 2),
+        "triggers": {},
+    }
+    since_ath = drawdown.loc[drawdown.index > ath_date]
+    for thresh, lags in _BTC_CYCLE_TRIGGERS.items():
+        hit = since_ath[since_ath <= thresh]
+        if hit.empty:
+            out["triggers"][f"{int(thresh * 100)}pct"] = {"triggered": False}
+            continue
+        trig_date = hit.index[0]
+        window_start = trig_date + timedelta(days=min(lags))
+        window_end = trig_date + timedelta(days=max(lags))
+        out["triggers"][f"{int(thresh * 100)}pct"] = {
+            "triggered": True,
+            "trigger_date": str(trig_date)[:10],
+            "days_since_trigger": int((closes.index[-1] - trig_date).days),
+            "historical_lags_days": list(lags),
+            "predicted_bottom_window": [str(window_start)[:10], str(window_end)[:10]],
+        }
+    out["caveat"] = ("n=2 fully-verified cycles (2013's top predates free daily history) — a real, tight-looking "
+                      "pattern (2-4 day spread between the two cycles) but not statistically testable at this "
+                      "sample size. Descriptive watch-item only, never a switching signal.")
+    return out
+
+
 def ladder_read(*, weather: dict, data=None) -> dict:
     """Combines the existing regime read with the asset-class snapshot into the ladder-facing section."""
     snap = asset_snapshot(data=data)
     state_key = _ladder_state_key(weather.get("regime_code", "mixed"), snap["inflation"], snap["assets"])
     state = _LADDER_STATES[state_key]
-    return {
+    out = {
         "assets": snap["assets"],
         "inflation": snap["inflation"],
         "housing": snap["housing"],
@@ -343,6 +402,13 @@ def ladder_read(*, weather: dict, data=None) -> dict:
                    "weights. Three independent signal families (price momentum, CPI-surprise, HMM regime "
                    "detection) were tested for timing ladder-bucket switches and all three were rejected."),
     }
+    try:
+        btc_cycle = _btc_cycle_read(data=data)
+        if btc_cycle is not None:
+            out["btc_cycle"] = btc_cycle
+    except Exception as exc:
+        out["btc_cycle"] = {"error": f"btc cycle read unavailable ({str(exc)[:80]})"}
+    return out
 
 
 def _regime(score, comp) -> dict:
