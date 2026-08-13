@@ -216,11 +216,62 @@ def asset_snapshot(*, data=None) -> dict:
     return {"assets": rows, "inflation": cpi, "housing": housing}
 
 
-def _ladder_verdict(regime_code: str, cpi: dict, assets: dict) -> str:
-    """Plain-language 'what this means for the horizon ladder' — picked from a decision table keyed on the
-    already-computed weather regime + inflation direction + which asset (if any) shows elevated vol/stretch.
-    Deliberately descriptive, not a switch signal: [[store-of-value-timing-thread-closed]] rejected 3 independent
-    signal families for actively timing ladder-bucket switches — this only narrates current conditions."""
+_LADDER_STATES = {
+    # key -> (verdict: what's happening, action: what to do about it — scoped to calendar-contribution timing
+    # and sizing discipline WITHIN the static ladder, never "switch bucket weights", per
+    # [[store-of-value-timing-thread-closed]] (3 signal families tested and rejected for that).
+    "risk_off": {
+        "verdict": ("Risk-off tape. This is the environment the near-term (0-6mo) cash/T-bill bucket exists for — "
+                    "capital preservation over any risky-asset bucket right now, regardless of what inflation is doing."),
+        "action": ("Hold the line on target weights. Don't add fresh equity/gold exposure ahead of schedule; if a "
+                   "scheduled contribution falls in this window, it's fine to let it proceed at target size — "
+                   "just don't increase risk-asset weight beyond plan while this persists."),
+    },
+    "stagflation_signature": {
+        "verdict": ("Inflation accelerating, gold volatility elevated, and bonds selling off together — the classic "
+                    "stagflation-scare signature. This is exactly the environment the 15% structural gold allocation "
+                    "in the 2-7yr and 7yr+ buckets exists for; it's earning its keep as ballast, not something to "
+                    "chase or resize."),
+        "action": ("No changes. Let the existing gold allocation absorb this — don't add to it beyond target and "
+                   "don't sell it for being volatile; both are reacting to a condition it's specifically there for."),
+    },
+    "benign_growth": {
+        "verdict": ("Inflation cooling with a trending risk-on tape and equities not yet stretched — a fairly benign "
+                    "setup for the growth-heavy 7yr+ bucket. No asset here is signaling distress; the static "
+                    "allocation is doing what it's supposed to without needing a second look."),
+        "action": "Proceed with any scheduled contribution at normal target weights — nothing here argues for delaying or front-loading.",
+    },
+    "equities_stretched": {
+        "verdict": ("Equities are trend-extended (top of their own 200d-distance range) — new equity-heavy "
+                    "allocations right now are entering at a stretched point in the cycle, not a rich one. Doesn't "
+                    "argue for exiting the 7yr+ bucket's equity weight, just for not over-adding beyond target."),
+        "action": ("If you're due for a scheduled contribution, still make it at target weight — don't skip it. Just "
+                   "don't voluntarily overweight equities beyond plan while they're this extended."),
+    },
+    "equities_washed_out": {
+        "verdict": ("Equities are washed out relative to trend (bottom of their own 200d-distance range) — if you're "
+                    "DEPLOYING new money into the 2-7yr/7yr+ buckets on a calendar schedule, this is a relatively "
+                    "better entry than a stretched one, though the whole point of a static ladder is not needing to "
+                    "time this."),
+        "action": ("If a scheduled contribution is due, this is a reasonable window to make it rather than delay — "
+                   "still at target weight, not oversized. Don't treat this as a reason to pull FUTURE contributions forward."),
+    },
+    "gold_hot": {
+        "verdict": ("Gold's realized volatility is in the top third of its own 2yr range. Gold in this ladder is held "
+                    "structurally as ballast (fixed 15%), not actively traded — elevated vol here is a reason for "
+                    "position-sizing discipline if anyone in the household DOES trade gold tactically elsewhere, not a "
+                    "reason to touch the static allocation."),
+        "action": "No action on the structural allocation. If trading gold tactically outside the ladder, size down given the elevated range.",
+    },
+    "quiet": {
+        "verdict": ("No asset class is showing a stretched or elevated reading right now — a quiet environment where the "
+                    "static horizon-ladder allocation needs no attention beyond its normal calendar rebalance."),
+        "action": "No action needed. Proceed with the normal calendar rebalance/contribution schedule.",
+    },
+}
+
+
+def _ladder_state_key(regime_code: str, cpi: dict, assets: dict) -> str:
     infl_dir = cpi.get("direction", "stable")
     gold = assets.get("gold", {})
     equities = assets.get("equities", {})
@@ -231,33 +282,18 @@ def _ladder_verdict(regime_code: str, cpi: dict, assets: dict) -> str:
     bonds_selling_off = (bonds.get("ret_3m_pct") or 0) < -3
 
     if regime_code == "risk_off":
-        return ("Risk-off tape. This is the environment the near-term (0-6mo) cash/T-bill bucket exists for — "
-                "capital preservation over any risky-asset bucket right now, regardless of what inflation is doing.")
+        return "risk_off"
     if infl_dir == "accelerating" and gold_hot and bonds_selling_off:
-        return ("Inflation accelerating, gold volatility elevated, and bonds selling off together — the classic "
-                "stagflation-scare signature. This is exactly the environment the 15% structural gold allocation "
-                "in the 2-7yr and 7yr+ buckets exists for; it's earning its keep as ballast, not something to "
-                "chase or resize.")
+        return "stagflation_signature"
     if infl_dir == "cooling" and regime_code == "risk_on_trending" and not eq_stretched:
-        return ("Inflation cooling with a trending risk-on tape and equities not yet stretched — a fairly benign "
-                "setup for the growth-heavy 7yr+ bucket. No asset here is signaling distress; the static "
-                "allocation is doing what it's supposed to without needing a second look.")
+        return "benign_growth"
     if eq_stretched:
-        return ("Equities are trend-extended (top of their own 200d-distance range) — new equity-heavy "
-                "allocations right now are entering at a stretched point in the cycle, not a rich one. Doesn't "
-                "argue for exiting the 7yr+ bucket's equity weight, just for not over-adding beyond target.")
+        return "equities_stretched"
     if eq_washed_out:
-        return ("Equities are washed out relative to trend (bottom of their own 200d-distance range) — if you're "
-                "DEPLOYING new money into the 2-7yr/7yr+ buckets on a calendar schedule, this is a relatively "
-                "better entry than a stretched one, though the whole point of a static ladder is not needing to "
-                "time this.")
+        return "equities_washed_out"
     if gold_hot:
-        return ("Gold's realized volatility is in the top third of its own 2yr range. Gold in this ladder is held "
-                "structurally as ballast (fixed 15%), not actively traded — elevated vol here is a reason for "
-                "position-sizing discipline if anyone in the household DOES trade gold tactically elsewhere, not a "
-                "reason to touch the static allocation.")
-    return ("No asset class is showing a stretched or elevated reading right now — a quiet environment where the "
-            "static horizon-ladder allocation needs no attention beyond its normal calendar rebalance.")
+        return "gold_hot"
+    return "quiet"
 
 
 def _trade_reads(assets: dict) -> list:
@@ -292,15 +328,18 @@ def _trade_reads(assets: dict) -> list:
 def ladder_read(*, weather: dict, data=None) -> dict:
     """Combines the existing regime read with the asset-class snapshot into the ladder-facing section."""
     snap = asset_snapshot(data=data)
-    verdict = _ladder_verdict(weather.get("regime_code", "mixed"), snap["inflation"], snap["assets"])
+    state_key = _ladder_state_key(weather.get("regime_code", "mixed"), snap["inflation"], snap["assets"])
+    state = _LADDER_STATES[state_key]
     return {
         "assets": snap["assets"],
         "inflation": snap["inflation"],
         "housing": snap["housing"],
-        "ladder_verdict": verdict,
+        "ladder_verdict": state["verdict"],
+        "ladder_action": state["action"],
         "trade_reads": _trade_reads(snap["assets"]),
-        "caveat": ("Descriptive only — this section reads current conditions, it does not recommend switching "
-                   "assets. Three independent signal families (price momentum, CPI-surprise, HMM regime "
+        "caveat": ("Descriptive only — this section reads current conditions; the action line covers "
+                   "contribution-timing and sizing discipline WITHIN the static ladder, never switching bucket "
+                   "weights. Three independent signal families (price momentum, CPI-surprise, HMM regime "
                    "detection) were tested for timing ladder-bucket switches and all three were rejected."),
     }
 
