@@ -164,13 +164,20 @@ def _fred_series(series_id: str, start: str = "2010-01-01") -> dict:
 
 
 def _bls_series(series_id: str, start_year: int, end_year: int) -> list:
-    """Free, keyless BLS v2 API (needs a non-default User-Agent from some hosts, or it 403s). [(date, value)]."""
-    import urllib.request, json
+    """Free, keyless BLS v2 API (needs a non-default User-Agent from some hosts, or it 403s). [(date, value)].
+    The keyless quota is shared and gets exhausted; each per-decade chunk is write-through cached to disk
+    (~/.cache/market_traits by default, override via MARKET_TRAITS_CACHE_DIR) so a rate-limited live call
+    falls back to the last successful fetch instead of silently returning nothing for that chunk."""
+    import os, urllib.request, json
+    from pathlib import Path
     from datetime import date
+    cache_dir = Path(os.environ.get("MARKET_TRAITS_CACHE_DIR", Path.home() / ".cache" / "market_traits"))
     out = {}
     y = start_year
     while y <= end_year:
         y2 = min(y + 9, end_year)
+        fp = cache_dir / f"bls_{series_id}_{y}_{y2}.json"
+        chunk = {}
         body = json.dumps({"seriesid": [series_id], "startyear": str(y), "endyear": str(y2)}).encode()
         req = urllib.request.Request("https://api.bls.gov/publicAPI/v2/timeseries/data/", data=body,
                                       headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
@@ -179,9 +186,18 @@ def _bls_series(series_id: str, start_year: int, end_year: int) -> list:
             if d.get("status") == "REQUEST_SUCCEEDED":
                 for row in d["Results"]["series"][0]["data"]:
                     if row["period"].startswith("M") and row["period"] != "M13" and row["value"] not in ("-", ""):
-                        out[date(int(row["year"]), int(row["period"][1:]), 1)] = float(row["value"])
+                        chunk[date(int(row["year"]), int(row["period"][1:]), 1)] = float(row["value"])
+                if chunk:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    fp.write_text(json.dumps({k.isoformat(): v for k, v in chunk.items()}))
         except Exception:
             pass
+        if not chunk and fp.exists():
+            try:
+                chunk = {date.fromisoformat(k): v for k, v in json.loads(fp.read_text()).items()}
+            except Exception:
+                pass
+        out.update(chunk)
         y = y2 + 1
     return sorted(out.items())
 
