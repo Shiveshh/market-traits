@@ -670,6 +670,7 @@ def debt_cycle_read(*, start: str = "1990-01-01", data=None) -> dict:
     return {
         "history": {"dates": dates, "stage_code": numeric, "stage_label": stages,
                      "recession_flag": [int(r) if r == r else 0 for r in rec.tolist()]},
+        "as_of": dates[-1],
         "current_stage": cur,
         "current_stage_label": info["label"],
         "months_in_stage": months_in_stage,
