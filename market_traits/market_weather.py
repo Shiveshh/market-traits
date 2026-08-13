@@ -20,6 +20,11 @@ from __future__ import annotations
 from typing import Optional
 
 _SECTORS = ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLC"]
+_SECTOR_NAMES = {
+    "XLK": "Technology", "XLF": "Financials", "XLE": "Energy", "XLV": "Health Care",
+    "XLY": "Consumer Discretionary", "XLP": "Consumer Staples", "XLI": "Industrials",
+    "XLB": "Materials", "XLU": "Utilities", "XLC": "Communication Services",
+}
 _LADDER_ASSETS = {"equities": "SPY", "gold": "GLD", "bonds": "TLT", "crypto": "BTC-USD"}
 # BTC halving-cycle bottom-timing calibration (Market-Analysis repo memory: btc-halving-cycle-bottom-watch,
 # 2026-08-13). Top-anchored, real-time-detectable drawdown trigger -> bottom lag, calibrated off the two
@@ -28,6 +33,8 @@ _LADDER_ASSETS = {"equities": "SPY", "gold": "GLD", "bonds": "TLT", "crypto": "B
 _BTC_CYCLE_TRIGGERS = {-0.20: (358, 360), -0.30: (350, 346)}
 _CPI_SERIES = "CUSR0000SA0"
 _HOUSING_SERIES = "CSUSHPINSA"  # Case-Shiller US National Home Price Index, FRED, monthly, ~2mo publication lag
+_HY_OAS_SERIES = "BAMLH0A0HYM2"  # ICE BofA US High Yield Index Option-Adjusted Spread, FRED, daily
+_CLAIMS_SERIES = "ICSA"  # Initial jobless claims, FRED, weekly
 
 
 def _closes(sym, start):
@@ -50,6 +57,20 @@ def _clip01(x, a, b):
     return float(max(0.0, min(1.0, (x - a) / (b - a)))) if b != a else 0.0
 
 
+def _fred_daily_series(series_id: str, start: str, idx) -> "pd.Series":
+    """FRED series reindexed/ffilled onto `idx` (a price-series DatetimeIndex). Empty series on any fetch failure —
+    callers fall back to neutral (0.5) rather than erroring the whole weather read over one flaky source."""
+    import pandas as pd
+    try:
+        raw = _fred_series(series_id, start)
+        s = pd.Series(raw)
+        s.index = pd.to_datetime(s.index)
+        s = s.sort_index()
+        return s.reindex(idx, method="ffill")
+    except Exception:
+        return pd.Series(index=idx, dtype=float)
+
+
 def weather_series(*, start: str = "2018-01-01", data=None) -> dict:
     """Compute the daily risk-on score + its components over the window (for PAST timeline + CURRENT)."""
     import pandas as pd
@@ -60,6 +81,17 @@ def weather_series(*, start: str = "2018-01-01", data=None) -> dict:
     else:
         spy, vix, hyg, lqd, sectors = data["spy"], data["vix"], data["hyg"], data["lqd"], data["sectors"]
     idx = spy.index
+    # Credit spread (HY OAS) and jobs (initial claims): both optional-injectable via `data`; live fetch
+    # defaults to FRED when not supplied. Missing/unfetchable -> neutral 0.5 contribution, never a hard error.
+    if data is not None and "hy_oas" in data:
+        hy_oas = data["hy_oas"].reindex(idx, method="ffill")
+    else:
+        hy_oas = _fred_daily_series(_HY_OAS_SERIES, start, idx) if data is None else pd.Series(index=idx, dtype=float)
+    if data is not None and "claims" in data:
+        claims = data["claims"].reindex(idx, method="ffill")
+    else:
+        claims = _fred_daily_series(_CLAIMS_SERIES, start, idx) if data is None else pd.Series(index=idx, dtype=float)
+    claims_mom = claims / claims.shift(20) - 1  # ~4wk-over-4wk change in weekly claims (ffilled onto trading days)
     ma200 = spy.rolling(200).mean()
     er = _efficiency_ratio(spy, 20)
     # breadth: fraction of sectors above their own 200d MA
@@ -80,12 +112,28 @@ def weather_series(*, start: str = "2018-01-01", data=None) -> dict:
             continue
         trend = 1.0 if spy.loc[d] > ma200.loc[d] else 0.0
         trend = 0.5 * trend + 0.5 * _clip01(float(spy.loc[d] / ma200.loc[d]), 0.95, 1.08)
+        hy_oas_v = hy_oas.loc[d] if d in hy_oas.index else float("nan")
+        claims_mom_v = claims_mom.loc[d] if d in claims_mom.index else float("nan")
         comp = {
             "trend": round(trend, 3),
             "breadth": round(float(breadth.loc[d]), 3),
             "efficiency": round(float(er.loc[d]), 3),
             "calm": round(_clip01(-float(vixr.loc[d]), -35, -13), 3),      # low VIX = calm (inverted ramp)
             "risk_appetite": round(_clip01(float(credit_mom.loc[d]) if pd.notna(credit_mom.loc[d]) else 0, -0.02, 0.02), 3),
+            # HY OAS spread: empirically (HAC/Newey-West regression on fwd 20d/60d SPY returns, N~700-730,
+            # t=2.45/3.86) a WIDER spread has led higher forward returns over this series' available free
+            # history, not tighter — likely mean-reversion-after-stress rather than a stable structural
+            # lead/lag, and the free keyless FRED pull for this series only covers ~2yr (source truncates
+            # regardless of requested start date) so this reading is a single-regime sample, not confirmed
+            # across a full cycle. Oriented to match the measured (not assumed) direction; revisit if a
+            # longer history becomes available to re-test.
+            "credit_spread": round(_clip01(float(hy_oas_v), 3.0, 8.0) if pd.notna(hy_oas_v) else 0.5, 3),
+            # Initial claims: empirically (same method, N~3600+, t=3.96/9.60) RISING claims momentum has
+            # led higher forward SPY returns, not falling — claims are a lagging/late-cycle indicator and
+            # the market tends to rally into the labour-market trough ("bad news is good news" / easing
+            # expectations). Oriented to match the measured direction rather than the naive "healthy jobs
+            # = risk-on" assumption, which tested backwards.
+            "jobs": round(_clip01(float(claims_mom_v), -0.15, 0.10) if pd.notna(claims_mom_v) else 0.5, 3),
         }
         rows[str(d)[:10]] = {"score": round(sum(comp.values()) / len(comp), 3), **comp}
     return {"series": rows, "dates": list(rows.keys())}
@@ -219,6 +267,42 @@ def asset_snapshot(*, data=None) -> dict:
         pass
 
     return {"assets": rows, "inflation": cpi, "housing": housing}
+
+
+def sector_breakdown(*, data=None) -> dict:
+    """Per-sector detail behind the aggregate `breadth` score component: price vs its own 200d MA, 1m/3m return,
+    and relative strength vs SPY over the same window. `breadth` only reports the fraction above trend; this is
+    the same 10 SPDR sectors broken out individually (XLI/XLY included) so a reader can see which sectors are
+    driving that number rather than just the aggregate."""
+    import pandas as pd
+    if data is not None and "sectors" in data and "spy" in data:
+        spy, sectors = data["spy"], data["sectors"]
+    else:
+        spy = _closes("SPY", "2018-01-01")
+        sectors = {s: _closes(s, "2018-01-01") for s in _SECTORS}
+
+    spy_ret_3m = float(spy.iloc[-1] / spy.iloc[-66] - 1) if len(spy) > 66 else None
+    rows = []
+    for sym, s in sectors.items():
+        s = s.dropna()
+        if len(s) < 22:
+            continue
+        ma200 = s.rolling(200).mean()
+        above_200d = bool(s.iloc[-1] > ma200.iloc[-1]) if pd.notna(ma200.iloc[-1]) else None
+        ret_1m = float(s.iloc[-1] / s.iloc[-22] - 1) * 100 if len(s) > 22 else None
+        ret_3m = float(s.iloc[-1] / s.iloc[-66] - 1) * 100 if len(s) > 66 else None
+        rel_strength_3m = (ret_3m / 100 - spy_ret_3m) * 100 if ret_3m is not None and spy_ret_3m is not None else None
+        rows.append({
+            "symbol": sym,
+            "name": _SECTOR_NAMES.get(sym, sym),
+            "last": round(float(s.iloc[-1]), 2),
+            "above_200d_ma": above_200d,
+            "ret_1m_pct": round(ret_1m, 2) if ret_1m is not None else None,
+            "ret_3m_pct": round(ret_3m, 2) if ret_3m is not None else None,
+            "rel_strength_vs_spy_3m_pct": round(rel_strength_3m, 2) if rel_strength_3m is not None else None,
+        })
+    rows.sort(key=lambda r: (r["ret_3m_pct"] is None, -(r["ret_3m_pct"] or 0)))
+    return {"sectors": rows, "as_of": str(spy.index[-1])[:10] if len(spy) else None}
 
 
 _LADDER_STATES = {
@@ -462,13 +546,23 @@ def _compute_weather(*, start: str = "2018-01-01", data=None) -> dict:
     out = {
         "as_of": dates[-1], "score": cur["score"], "regime": reg["label"], "regime_code": reg["code"],
         "for_book": reg["for_book"],
-        "components": {k: cur[k] for k in ("trend", "breadth", "efficiency", "calm", "risk_appetite")},
+        "components": {k: cur[k] for k in
+                       ("trend", "breadth", "efficiency", "calm", "risk_appetite", "credit_spread", "jobs")},
         "past": {"dates": dates[-252:], "scores": [round(x, 3) for x in hist[-252:]]},
         "forecast": forecast,
-        "note": ("Risk-on score = mean of trend, breadth, trending-vs-choppy (Kaufman efficiency), calm (inverse VIX), "
-                 "and credit risk-appetite. Complements the crisis gauge. It says which conditions FAVOUR which "
-                 "strategies — breakout wants ☀️ trending, mean-reversion/carry prefer 🌀 chop."),
+        "note": ("Risk-on score = mean of trend, breadth, trending-vs-choppy (Kaufman efficiency), calm (inverse "
+                 "VIX), credit risk-appetite (HYG/LQD momentum), credit spread level (HY OAS — empirically wider "
+                 "spread has led higher forward returns over this series' short free history, so scored as such, "
+                 "not the naive tighter=risk-on assumption), and jobs (initial-claims momentum — empirically "
+                 "rising claims has led higher forward returns, consistent with claims being a lagging indicator "
+                 "and markets rallying into the labour-market trough, so scored opposite the naive healthy-jobs "
+                 "assumption). Complements the crisis gauge. It says which conditions FAVOUR which strategies — "
+                 "breakout wants ☀️ trending, mean-reversion/carry prefer 🌀 chop."),
     }
+    try:
+        out["sectors"] = sector_breakdown(data=data)
+    except Exception as exc:
+        out["sectors"] = {"error": f"sector breakdown unavailable ({str(exc)[:80]})"}
     try:
         out["ladder"] = ladder_read(weather=out, data=data)
     except Exception as exc:
