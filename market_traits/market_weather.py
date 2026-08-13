@@ -334,6 +334,7 @@ def ladder_read(*, weather: dict, data=None) -> dict:
         "assets": snap["assets"],
         "inflation": snap["inflation"],
         "housing": snap["housing"],
+        "ladder_state": state_key,
         "ladder_verdict": state["verdict"],
         "ladder_action": state["action"],
         "trade_reads": _trade_reads(snap["assets"]),
