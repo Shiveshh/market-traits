@@ -19,21 +19,23 @@ from __future__ import annotations
 
 from typing import Optional
 
-_SECTORS = ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLC"]
+_SECTORS = ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLC", "XLRE"]
 _SECTOR_NAMES = {
     "XLK": "Technology", "XLF": "Financials", "XLE": "Energy", "XLV": "Health Care",
     "XLY": "Consumer Discretionary", "XLP": "Consumer Staples", "XLI": "Industrials",
-    "XLB": "Materials", "XLU": "Utilities", "XLC": "Communication Services",
+    "XLB": "Materials", "XLU": "Utilities", "XLC": "Communication Services", "XLRE": "Real Estate",
 }
 _LADDER_ASSETS = {"equities": "SPY", "gold": "GLD", "bonds": "TLT", "crypto": "BTC-USD"}
 # iShares "S&P Global 1200 Sector" ETFs — the closest free international-sector coverage available: each
 # tracks its GICS sector across ~30 countries (heavily US-weighted, since global market cap is, but genuinely
-# broader than the SPDR sleeve). Not pure ex-US; labelled "global" in the API/UI for that reason.
-_GLOBAL_SECTORS = ["IXC", "IXG", "IXN", "IXJ", "MXI", "IXP", "JXI", "KXI", "RXI", "EXI"]
+# broader than the SPDR sleeve). Not pure ex-US; labelled "global" in the API/UI for that reason. Real estate
+# uses REET (iShares Global REIT) instead — global GICS-sector-tracking ETFs don't cover real estate the way
+# they do the other 10 sectors, REIT-indexed is the closest free equivalent.
+_GLOBAL_SECTORS = ["IXC", "IXG", "IXN", "IXJ", "MXI", "IXP", "JXI", "KXI", "RXI", "EXI", "REET"]
 _GLOBAL_SECTOR_NAMES = {
     "IXC": "Energy", "IXG": "Financials", "IXN": "Technology", "IXJ": "Health Care",
     "MXI": "Materials", "IXP": "Communication Services", "JXI": "Utilities",
-    "KXI": "Consumer Staples", "RXI": "Consumer Discretionary", "EXI": "Industrials",
+    "KXI": "Consumer Staples", "RXI": "Consumer Discretionary", "EXI": "Industrials", "REET": "Real Estate",
 }
 _GLOBAL_BENCHMARK = "ACWI"  # iShares MSCI ACWI — global equity benchmark for relative-strength comparison
 # BTC halving-cycle bottom-timing calibration (Market-Analysis repo memory: btc-halving-cycle-bottom-watch,
