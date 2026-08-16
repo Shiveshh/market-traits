@@ -26,6 +26,16 @@ _SECTOR_NAMES = {
     "XLB": "Materials", "XLU": "Utilities", "XLC": "Communication Services",
 }
 _LADDER_ASSETS = {"equities": "SPY", "gold": "GLD", "bonds": "TLT", "crypto": "BTC-USD"}
+# iShares "S&P Global 1200 Sector" ETFs — the closest free international-sector coverage available: each
+# tracks its GICS sector across ~30 countries (heavily US-weighted, since global market cap is, but genuinely
+# broader than the SPDR sleeve). Not pure ex-US; labelled "global" in the API/UI for that reason.
+_GLOBAL_SECTORS = ["IXC", "IXG", "IXN", "IXJ", "MXI", "IXP", "JXI", "KXI", "RXI", "EXI"]
+_GLOBAL_SECTOR_NAMES = {
+    "IXC": "Energy", "IXG": "Financials", "IXN": "Technology", "IXJ": "Health Care",
+    "MXI": "Materials", "IXP": "Communication Services", "JXI": "Utilities",
+    "KXI": "Consumer Staples", "RXI": "Consumer Discretionary", "EXI": "Industrials",
+}
+_GLOBAL_BENCHMARK = "ACWI"  # iShares MSCI ACWI — global equity benchmark for relative-strength comparison
 # BTC halving-cycle bottom-timing calibration (Market-Analysis repo memory: btc-halving-cycle-bottom-watch,
 # 2026-08-13). Top-anchored, real-time-detectable drawdown trigger -> bottom lag, calibrated off the two
 # fully data-verified cycles (2017, 2021 tops; 2013 predates free daily history). n=2 — descriptive watch-item
@@ -289,19 +299,42 @@ def asset_snapshot(*, data=None) -> dict:
     return {"assets": rows, "inflation": cpi, "housing": housing}
 
 
-def sector_breakdown(*, data=None) -> dict:
-    """Per-sector detail behind the aggregate `breadth` score component: price vs its own 200d MA, 1m/3m return,
-    and relative strength vs SPY over the same window. `breadth` only reports the fraction above trend; this is
-    the same 10 SPDR sectors broken out individually (XLI/XLY included) so a reader can see which sectors are
-    driving that number rather than just the aggregate."""
+def _closes_and_volume(sym, start):
+    import yfinance as yf
     import pandas as pd
-    if data is not None and "sectors" in data and "spy" in data:
-        spy, sectors = data["spy"], data["sectors"]
-    else:
-        spy = _closes("SPY", "2018-01-01")
-        sectors = {s: _closes(s, "2018-01-01") for s in _SECTORS}
+    df = yf.download(sym, start=start, interval="1d", auto_adjust=True, progress=False)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df["Close"].dropna(), df["Volume"].dropna()
 
-    spy_ret_3m = float(spy.iloc[-1] / spy.iloc[-66] - 1) if len(spy) > 66 else None
+
+def _sector_pe(sym) -> Optional[float]:
+    """Best-effort trailing P/E for a sector SPDR ETF via yfinance `.info`. Not all fields are populated for
+    every ETF/date; returns None rather than raising when unavailable — this is a supplementary read, not a
+    gate, so a missing value should degrade gracefully instead of breaking the whole breakdown."""
+    try:
+        import yfinance as yf
+        info = yf.Ticker(sym).info
+        pe = info.get("trailingPE")
+        return round(float(pe), 2) if pe else None
+    except Exception:
+        return None
+
+
+def _sector_breakdown_core(symbols, names, benchmark_sym, benchmark, sectors, bench_vol, sector_vols) -> dict:
+    """Shared computation behind `sector_breakdown` (SPDR/US) and `global_sector_breakdown` (iShares global):
+    price vs its own 200d MA, 1m/3m return, relative strength vs the given benchmark, a 12-month rotation
+    trend (rel-strength sparkline), a volume-surge ratio, and best-effort trailing P/E."""
+    import pandas as pd
+    bench_ret_3m = float(benchmark.iloc[-1] / benchmark.iloc[-66] - 1) if len(benchmark) > 66 else None
+
+    def _rel_strength_at(s, bench_s, i):
+        if i < 66 or i >= len(s) or i >= len(bench_s):
+            return None
+        s_ret = s.iloc[i] / s.iloc[i - 66] - 1
+        bench_ret = bench_s.iloc[i] / bench_s.iloc[i - 66] - 1
+        return float(s_ret - bench_ret) * 100
+
     rows = []
     for sym, s in sectors.items():
         s = s.dropna()
@@ -311,18 +344,82 @@ def sector_breakdown(*, data=None) -> dict:
         above_200d = bool(s.iloc[-1] > ma200.iloc[-1]) if pd.notna(ma200.iloc[-1]) else None
         ret_1m = float(s.iloc[-1] / s.iloc[-22] - 1) * 100 if len(s) > 22 else None
         ret_3m = float(s.iloc[-1] / s.iloc[-66] - 1) * 100 if len(s) > 66 else None
-        rel_strength_3m = (ret_3m / 100 - spy_ret_3m) * 100 if ret_3m is not None and spy_ret_3m is not None else None
+        rel_strength_3m = (ret_3m / 100 - bench_ret_3m) * 100 if ret_3m is not None and bench_ret_3m is not None else None
+
+        # 12mo rotation trend: monthly (~21 trading day) rel-strength samples, for a sparkline of whether this
+        # sector's relative strength is building or fading, not just its current snapshot.
+        history = []
+        if len(s) > 66 + 252:
+            idxs = range(len(s) - 252, len(s), 21)
+            for i in idxs:
+                rs = _rel_strength_at(s, benchmark, i)
+                if rs is not None:
+                    history.append({"date": str(s.index[i])[:10], "rel_strength_vs_spy_3m_pct": round(rs, 2)})
+
+        vol_ratio = None
+        v = sector_vols.get(sym)
+        if v is not None and len(v.dropna()) > 63:
+            v = v.dropna()
+            avg_5d, avg_63d = v.iloc[-5:].mean(), v.iloc[-63:].mean()
+            vol_ratio = round(float(avg_5d / avg_63d), 2) if avg_63d else None
+
         rows.append({
             "symbol": sym,
-            "name": _SECTOR_NAMES.get(sym, sym),
+            "name": names.get(sym, sym),
             "last": round(float(s.iloc[-1]), 2),
             "above_200d_ma": above_200d,
             "ret_1m_pct": round(ret_1m, 2) if ret_1m is not None else None,
             "ret_3m_pct": round(ret_3m, 2) if ret_3m is not None else None,
             "rel_strength_vs_spy_3m_pct": round(rel_strength_3m, 2) if rel_strength_3m is not None else None,
+            "rel_strength_history": history,
+            "volume_ratio_5d_63d": vol_ratio,
+            "trailing_pe": _sector_pe(sym),
         })
     rows.sort(key=lambda r: (r["ret_3m_pct"] is None, -(r["ret_3m_pct"] or 0)))
-    return {"sectors": rows, "as_of": str(spy.index[-1])[:10] if len(spy) else None}
+    return {"sectors": rows, "as_of": str(benchmark.index[-1])[:10] if len(benchmark) else None,
+            "benchmark": benchmark_sym}
+
+
+def sector_breakdown(*, data=None) -> dict:
+    """Per-sector detail behind the aggregate `breadth` score component — the 10 SPDR sectors (XLI/XLY
+    included) benchmarked against SPY, so a reader can see which sectors are driving the aggregate `breadth`
+    number rather than just the fraction-above-trend total. See `_sector_breakdown_core` for the metrics.
+
+    Deliberately NOT included, and why: sector market-cap weights and constituent-level internal breadth
+    (% of each sector's stocks above their own 200DMA) both need a GICS-tagged stock universe with per-stock
+    price history — real, buildable (yfinance `.info` has `sector`/`marketCap`; `backend/factor/engine.py`'s
+    `_info_cached`/`_fetch_bounded` in the Market-Analysis repo already does this pattern across the S&P 500),
+    but it's a ~500-symbol batch job, not an inline computation — belongs as its own cached daily screen
+    alongside the other factor screens, not bolted into this 30min-cached endpoint. International coverage is
+    handled separately by `global_sector_breakdown` (iShares S&P Global Sector ETFs).
+    """
+    if data is not None and "sectors" in data and "spy" in data:
+        spy, sectors = data["spy"], data["sectors"]
+        sector_vols = data.get("sector_vols", {})
+    else:
+        spy, _ = _closes_and_volume("SPY", "2018-01-01")
+        sectors, sector_vols = {}, {}
+        for s in _SECTORS:
+            sectors[s], sector_vols[s] = _closes_and_volume(s, "2018-01-01")
+    return _sector_breakdown_core(_SECTORS, _SECTOR_NAMES, "SPY", spy, sectors, None, sector_vols)
+
+
+def global_sector_breakdown(*, data=None) -> dict:
+    """International/global counterpart to `sector_breakdown`: the 10 iShares S&P Global Sector ETFs
+    (IXC/IXG/IXN/IXJ/MXI/IXP/JXI/KXI/RXI/EXI), each tracking its GICS sector across ~30 countries, benchmarked
+    against ACWI (MSCI All Country World Index) instead of SPY. These are global-blend, not pure ex-US — global
+    market cap is itself heavily US-weighted — but they're the closest free international-sector data available;
+    a purer ex-US sector split has no free ETF-level equivalent."""
+    if data is not None and "global_sectors" in data and "acwi" in data:
+        acwi, sectors = data["acwi"], data["global_sectors"]
+        sector_vols = data.get("global_sector_vols", {})
+    else:
+        acwi, _ = _closes_and_volume(_GLOBAL_BENCHMARK, "2018-01-01")
+        sectors, sector_vols = {}, {}
+        for s in _GLOBAL_SECTORS:
+            sectors[s], sector_vols[s] = _closes_and_volume(s, "2018-01-01")
+    return _sector_breakdown_core(_GLOBAL_SECTORS, _GLOBAL_SECTOR_NAMES, _GLOBAL_BENCHMARK, acwi, sectors,
+                                   None, sector_vols)
 
 
 _LADDER_STATES = {
@@ -761,6 +858,10 @@ def _compute_weather(*, start: str = "2018-01-01", data=None) -> dict:
         out["sectors"] = sector_breakdown(data=data)
     except Exception as exc:
         out["sectors"] = {"error": f"sector breakdown unavailable ({str(exc)[:80]})"}
+    try:
+        out["global_sectors"] = global_sector_breakdown(data=data)
+    except Exception as exc:
+        out["global_sectors"] = {"error": f"global sector breakdown unavailable ({str(exc)[:80]})"}
     try:
         out["ladder"] = ladder_read(weather=out, data=data)
     except Exception as exc:
